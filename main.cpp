@@ -21,7 +21,7 @@ namespace Stella
     constexpr static uint16_t PIA_select_value = 0x0280;
     constexpr static uint16_t RAM_address_mask = 0x007f;
 
-    // TIA
+    // TIA write
     constexpr static uint16_t CXCLR = 0x002C;
     constexpr static uint16_t HMCLR = 0x002B;
     constexpr static uint16_t HMOVE = 0x002A;
@@ -68,17 +68,33 @@ namespace Stella
     constexpr static uint16_t VBLANK = 0x0001;
     constexpr static uint16_t VSYNC = 0x0000;
 
+    // TIA read
+    constexpr static uint16_t CXM0P = 0x30;
+    constexpr static uint16_t CXM1P = 0x31;
+    constexpr static uint16_t CXP0FB = 0x32;
+    constexpr static uint16_t CXP1FB = 0x33;
+    constexpr static uint16_t CXM0FB = 0x34;
+    constexpr static uint16_t CXM1FB = 0x35;
+    constexpr static uint16_t CXBLPF = 0x36;
+    constexpr static uint16_t CXPPMM = 0x37;
+    constexpr static uint16_t INPT0 = 0x38;
+    constexpr static uint16_t INPT1 = 0x39;
+    constexpr static uint16_t INPT2 = 0x3A;
+    constexpr static uint16_t INPT3 = 0x3B;
+    constexpr static uint16_t INPT4 = 0x3C;
+    constexpr static uint16_t INPT5 = 0x3D;
+
     // PIA
-    constexpr static uint16_t SWCHA = 0x01;
+    constexpr static uint16_t SWCHA = 0x00;
     constexpr static uint16_t SWACNT = 0x01;
-    constexpr static uint16_t SWCHB = 0x01;
-    constexpr static uint16_t SWBCNT = 0x01;
-    constexpr static uint16_t INTIM = 0x01;
-    constexpr static uint16_t INSTAT = 0x01;
-    constexpr static uint16_t TIM1T = 0x01;
-    constexpr static uint16_t TIM8T = 0x01;
-    constexpr static uint16_t TIM64T = 0x01;
-    constexpr static uint16_t T1024T = 0x01;
+    constexpr static uint16_t SWCHB = 0x02;
+    constexpr static uint16_t SWBCNT = 0x03;
+    constexpr static uint16_t INTIM = 0x04;
+    constexpr static uint16_t INSTAT = 0x05;
+    constexpr static uint16_t TIM1T = 0x14;
+    constexpr static uint16_t TIM8T = 0x15;
+    constexpr static uint16_t TIM64T = 0x16;
+    constexpr static uint16_t T1024T = 0x17;
 };
 
 typedef uint64_t clk_t;
@@ -148,10 +164,39 @@ struct stella
             uint8_t data = RAM.at(addr & RAM_address_mask);
             printf("read %02X from RAM %04X\n", data, addr);
             return data;
+        } else if(isTIA(addr)) {
+            printf("read from TIA %04X\n", addr);
+            addr &= 0x3F;
+            if(addr == INPT5) {
+                // read latched or unlatched input port 5
+                return 0x0;
+            } else if(addr == INPT4) {
+                // read latched or unlatched input port 4
+                return 0x0;
+            } else if(addr == INPT3) {
+                // read latched or unlatched input port 3
+                return 0x0;
+            } else if(addr == INPT2) {
+                // read latched or unlatched input port 2
+                return 0x0;
+            } else if(addr == INPT1) {
+                // read latched or unlatched input port 1
+                return 0x0;
+            } else if(addr == INPT0) {
+                // read latched or unlatched input port 0
+                return 0x0;
+            }
         } else if(isPIA(addr)) {
+            printf("read from PIA %04X\n", addr);
             addr &= 0x1F;
             if(addr == SWCHB) {
                 return 0x0;
+            } else if(addr == SWCHA) {
+                printf("read joystick bits\n");
+                return 0x0;
+            } else {
+                printf("unhandled read from PIA %04X\n", addr);
+                abort();
             }
         }
         printf("unhandled read from %04X\n", addr);
@@ -165,9 +210,11 @@ struct stella
             RAM[addr & RAM_address_mask] = data;
             printf("wrote %02X to RAM %04X\n", data, addr);
         } else if(isPIA(addr)) {
-            addr &= 0x1F;
             printf("wrote %02X to PIA %04X\n", data, addr);
+            addr &= 0x1F;
+            // XXX TODO
         } else if(isTIA(addr)) {
+            printf("wrote %02X to TIA %04X\n", data, addr);
             addr &= 0x3F;
             if(addr == VSYNC) {
                 if(data == 0x1) {
