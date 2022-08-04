@@ -98,6 +98,17 @@ namespace Stella
          TIM64T = 0x16,
          T1024T = 0x17,
     };
+
+    static constexpr uint32_t vsync_lines = 3;
+    static constexpr uint32_t vblank_lines = 37;
+    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
+    static constexpr uint32_t visible_lines = 192;
+    static constexpr uint32_t overscan_lines = 30;
+    static constexpr uint32_t lines_per_frame = (vsync_lines + vblank_lines + visible_lines + overscan_lines);
+    static constexpr uint32_t hblank_pixels = 68;
+    static constexpr uint32_t visible_pixels = 160;
+    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
+
 };
 
 typedef uint64_t clk_t;
@@ -108,6 +119,10 @@ struct sysclock // If I called this "clock" XCode would error out because I shad
 {
     clk_t clock;
     operator clk_t() const { return clock; }
+    void add_pixel_cycles(int N) 
+    {
+        clock += N;
+    }
     void add_cpu_cycles(int N) 
     {
         clock += N * 3;
@@ -121,8 +136,41 @@ struct stella
     uint16_t ROM_address_mask;
     sysclock& clk;
 
+    uint32_t interval_timer = 0;
+    uint32_t interval_timer_value = 0;
+    uint32_t interval_timer_prescaler = 1;
+    clk_t previous_interval_timer = 0;
+    bool timer_underflow = false;
+
+    void set_interval_timer(int prescaler, uint8_t value)
+    {
+        interval_timer_prescaler = prescaler;
+        interval_timer_value = value * prescaler;
+        if(value == 0) {
+            interval_timer = 0xFF * prescaler;
+        } else {
+            interval_timer = (value - 1) * prescaler;
+        }
+    }
+
+    void advance_interval_timer(sysclock& clk)
+    {
+        // could redo without loop
+        for(clk_t c = previous_interval_timer; c < clk; c++) {
+            if(interval_timer == 0) {
+                timer_underflow = true;
+                interval_timer = 0xFF * interval_timer_prescaler;
+            } else {
+                interval_timer--;
+            }
+        }
+        printf("timer now %d\n", interval_timer);
+        previous_interval_timer = clk;
+    }
+
     uint8_t tia_write[64];
     uint8_t tia_read[64];
+    bool wait_for_hsync = false;
 
     stella(const std::vector<uint8_t>& ROM, sysclock& clock) :
         ROM(std::move(ROM)),
@@ -188,12 +236,40 @@ struct stella
             } else if(addr == INPT0) {
                 // read latched or unlatched input port 0
                 return 0x0;
+            } else if(addr == CXM0P) {
+                printf("read collision flags for missile 0 and players\n");
+                return 0x0;
+            } else if(addr == CXM1P) {
+                printf("read collision flags for missile 1 and players\n");
+                return 0x0;
+            } else if(addr == CXP0FB) {
+                printf("read collision flags for player 0 and playfield and ball\n");
+                return 0x0;
+            } else if(addr == CXP1FB) {
+                printf("read collision flags for player 1 and playfield and ball\n");
+                return 0x0;
+            } else if(addr == CXM0FB) {
+                printf("read collision flags for missile 0 and playfield and ball\n");
+                return 0x0;
+            } else if(addr == CXM1FB) {
+                printf("read collision flags for missile 1 and playfield and ball\n");
+                return 0x0;
+            } else if(addr == CXBLPF) {
+                printf("read collision flags for ball and playfield\n");
+                return 0x0;
+            } else if(addr == CXPPMM) {
+                printf("read collision flags for player collision and missile collision\n");
+                return 0x0;
             }
         } else if(isPIA(addr)) {
             printf("read from PIA %04X\n", addr);
             addr &= 0x1F;
             if(addr == SWCHB) {
                 return 0x0;
+            } else if(addr == INTIM) {
+                uint8_t data = interval_timer / interval_timer_prescaler;
+                printf("read interval timer, %2X\n", data);
+                return data;
             } else if(addr == SWCHA) {
                 printf("read joystick bits\n");
                 return 0x0;
@@ -215,6 +291,18 @@ struct stella
         } else if(isPIA(addr)) {
             printf("wrote %02X to PIA %04X\n", data, addr);
             addr &= 0x1F;
+            if(addr == TIM1T) {
+                set_interval_timer(1, data);
+            } else if(addr == TIM8T) {
+                interval_timer = interval_timer_value = data * 8;
+                interval_timer_prescaler = 8;
+            } else if(addr == TIM64T) {
+                interval_timer = interval_timer_value = data * 64;
+                interval_timer_prescaler = 64;
+            } else if(addr == T1024T) {
+                interval_timer = interval_timer_value = data * 1024;
+                interval_timer_prescaler = 1024;
+            }
             // XXX TODO
         } else if(isTIA(addr)) {
             printf("wrote %02X to TIA %04X\n", data, addr);
@@ -316,6 +404,7 @@ struct stella
                 tia_write[NUSIZ1] = data;
             } else if(addr == RSYNC) { printf("write %d to RSYNC\n", data); 
             } else if(addr == WSYNC) { printf("write %d to WSYNC\n", data); 
+                wait_for_hsync = true;
             } else if(addr == VBLANK) { printf("write %d to VBLANK\n", data); 
             } else if(addr == 0x2D) {
                 // ignore
@@ -335,29 +424,347 @@ struct stella
 
 clk_t last_pixel_clocked;
 
-void scanout_to_current_clock(sysclock& clk, stella &hw)
-{
-    static constexpr uint32_t vsync_lines = 3;
-    static constexpr uint32_t vblank_lines = 37;
-    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
-    static constexpr uint32_t visible_lines = 192;
-    static constexpr uint32_t hblank_pixels = 68;
-    static constexpr uint32_t visible_pixels = 160;
-    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
+uint8_t screen[160 * 192];
 
-    while(last_pixel_clocked < clk - 1) {
-        uint32_t clock_within_frame = (last_pixel_clocked - vsync_reset_clock);
-        uint32_t scanout_line = clock_within_frame / pixels_per_line;
-        uint32_t scanout_pixel = clock_within_frame % pixels_per_line;
-        if((scanout_line >= visible_line_start) && (scanout_line < visible_line_start + visible_lines)) {
-            uint32_t visible_line = scanout_line - visible_line_start;
-            if((scanout_pixel >= hblank_pixels) && (scanout_pixel < hblank_pixels + visible_pixels)) {
-                uint32_t visible_pixel = scanout_pixel - hblank_pixels;
-                printf("%d %d\n", visible_pixel, visible_line);
+void set_colu(int x, int y, uint8_t colu)
+{
+    using namespace Stella;
+    screen[x + y * visible_pixels] = colu;
+}
+
+uint8_t colu_to_rgb[256][3] = {
+    {0x00, 0x00, 0x00},
+    {0x00, 0x00, 0x00},
+    {0x40, 0x40, 0x40},
+    {0x40, 0x40, 0x40},
+    {0x6C, 0x6C, 0x6C},
+    {0x6C, 0x6C, 0x6C},
+    {0x90, 0x90, 0x90},
+    {0x90, 0x90, 0x90},
+    {0xB0, 0xB0, 0xB0},
+    {0xB0, 0xB0, 0xB0},
+    {0xC8, 0xC8, 0xC8},
+    {0xC8, 0xC8, 0xC8},
+    {0xDC, 0xDC, 0xDC},
+    {0xDC, 0xDC, 0xDC},
+    {0xEC, 0xEC, 0xEC},
+    {0xEC, 0xEC, 0xEC},
+    {0x44, 0x44, 0x00},
+    {0x44, 0x44, 0x00},
+    {0x64, 0x64, 0x10},
+    {0x64, 0x64, 0x10},
+    {0x84, 0x84, 0x24},
+    {0x84, 0x84, 0x24},
+    {0xA0, 0xA0, 0x34},
+    {0xA0, 0xA0, 0x34},
+    {0xB8, 0xB8, 0x40},
+    {0xB8, 0xB8, 0x40},
+    {0xD0, 0xD0, 0x50},
+    {0xD0, 0xD0, 0x50},
+    {0xE8, 0xE8, 0x5C},
+    {0xE8, 0xE8, 0x5C},
+    {0xFC, 0xFC, 0x68},
+    {0xFC, 0xFC, 0x68},
+    {0x70, 0x28, 0x00},
+    {0x70, 0x28, 0x00},
+    {0x84, 0x44, 0x14},
+    {0x84, 0x44, 0x14},
+    {0x98, 0x5C, 0x28},
+    {0x98, 0x5C, 0x28},
+    {0xAC, 0x78, 0x3C},
+    {0xAC, 0x78, 0x3C},
+    {0xBC, 0x8C, 0x4C},
+    {0xBC, 0x8C, 0x4C},
+    {0xCC, 0xA0, 0x5C},
+    {0xCC, 0xA0, 0x5C},
+    {0xDC, 0xB4, 0x68},
+    {0xDC, 0xB4, 0x68},
+    {0xE8, 0xCC, 0x7C},
+    {0xE8, 0xCC, 0x7C},
+    {0x84, 0x18, 0x00},
+    {0x84, 0x18, 0x00},
+    {0x98, 0x34, 0x18},
+    {0x98, 0x34, 0x18},
+    {0xAC, 0x50, 0x30},
+    {0xAC, 0x50, 0x30},
+    {0xC0, 0x68, 0x48},
+    {0xC0, 0x68, 0x48},
+    {0xD0, 0x80, 0x5C},
+    {0xD0, 0x80, 0x5C},
+    {0xE0, 0x94, 0x70},
+    {0xE0, 0x94, 0x70},
+    {0xEC, 0xA8, 0x80},
+    {0xEC, 0xA8, 0x80},
+    {0xFC, 0xBC, 0x94},
+    {0xFC, 0xBC, 0x94},
+    {0x88, 0x00, 0x00},
+    {0x88, 0x00, 0x00},
+    {0x9C, 0x20, 0x20},
+    {0x9C, 0x20, 0x20},
+    {0xB0, 0x3C, 0x3C},
+    {0xB0, 0x3C, 0x3C},
+    {0xC0, 0x58, 0x58},
+    {0xC0, 0x58, 0x58},
+    {0xD0, 0x70, 0x70},
+    {0xD0, 0x70, 0x70},
+    {0xE0, 0x88, 0x88},
+    {0xE0, 0x88, 0x88},
+    {0xEC, 0xA0, 0xA0},
+    {0xEC, 0xA0, 0xA0},
+    {0xFC, 0xB4, 0xB4},
+    {0xFC, 0xB4, 0xB4},
+    {0x78, 0x00, 0x5C},
+    {0x78, 0x00, 0x5C},
+    {0x8C, 0x20, 0x74},
+    {0x8C, 0x20, 0x74},
+    {0xA0, 0x3C, 0x88},
+    {0xA0, 0x3C, 0x88},
+    {0xB0, 0x58, 0x9C},
+    {0xB0, 0x58, 0x9C},
+    {0xC0, 0x70, 0xB0},
+    {0xC0, 0x70, 0xB0},
+    {0xD0, 0x84, 0xC0},
+    {0xD0, 0x84, 0xC0},
+    {0xDC, 0x9C, 0xD0},
+    {0xDC, 0x9C, 0xD0},
+    {0xEC, 0xB0, 0xE0},
+    {0xEC, 0xB0, 0xE0},
+    {0x48, 0x00, 0x78},
+    {0x48, 0x00, 0x78},
+    {0x60, 0x20, 0x90},
+    {0x60, 0x20, 0x90},
+    {0x78, 0x3C, 0xA4},
+    {0x78, 0x3C, 0xA4},
+    {0x8C, 0x58, 0xB8},
+    {0x8C, 0x58, 0xB8},
+    {0xA0, 0x70, 0xCC},
+    {0xA0, 0x70, 0xCC},
+    {0xB4, 0x84, 0xDC},
+    {0xB4, 0x84, 0xDC},
+    {0xC4, 0x9C, 0xEC},
+    {0xC4, 0x9C, 0xEC},
+    {0xD4, 0xB0, 0xFC},
+    {0xD4, 0xB0, 0xFC},
+    {0x14, 0x00, 0x84},
+    {0x14, 0x00, 0x84},
+    {0x30, 0x20, 0x98},
+    {0x30, 0x20, 0x98},
+    {0x4C, 0x3C, 0xAC},
+    {0x4C, 0x3C, 0xAC},
+    {0x68, 0x58, 0xC0},
+    {0x68, 0x58, 0xC0},
+    {0x7C, 0x70, 0xD0},
+    {0x7C, 0x70, 0xD0},
+    {0x94, 0x88, 0xE0},
+    {0x94, 0x88, 0xE0},
+    {0xA8, 0xA0, 0xEC},
+    {0xA8, 0xA0, 0xEC},
+    {0xBC, 0xB4, 0xFC},
+    {0xBC, 0xB4, 0xFC},
+    {0x00, 0x00, 0x88},
+    {0x00, 0x00, 0x88},
+    {0x1C, 0x20, 0x9C},
+    {0x1C, 0x20, 0x9C},
+    {0x38, 0x40, 0xB0},
+    {0x38, 0x40, 0xB0},
+    {0x50, 0x5C, 0xC0},
+    {0x50, 0x5C, 0xC0},
+    {0x68, 0x74, 0xD0},
+    {0x68, 0x74, 0xD0},
+    {0x7C, 0x8C, 0xE0},
+    {0x7C, 0x8C, 0xE0},
+    {0x90, 0xA4, 0xEC},
+    {0x90, 0xA4, 0xEC},
+    {0xA4, 0xB8, 0xFC},
+    {0xA4, 0xB8, 0xFC},
+    {0x00, 0x18, 0x7C},
+    {0x00, 0x18, 0x7C},
+    {0x1C, 0x38, 0x90},
+    {0x1C, 0x38, 0x90},
+    {0x38, 0x54, 0xA8},
+    {0x38, 0x54, 0xA8},
+    {0x50, 0x70, 0xBC},
+    {0x50, 0x70, 0xBC},
+    {0x68, 0x88, 0xCC},
+    {0x68, 0x88, 0xCC},
+    {0x7C, 0x9C, 0xDC},
+    {0x7C, 0x9C, 0xDC},
+    {0x90, 0xB4, 0xEC},
+    {0x90, 0xB4, 0xEC},
+    {0xA4, 0xC8, 0xFC},
+    {0xA4, 0xC8, 0xFC},
+    {0x00, 0x2C, 0x5C},
+    {0x00, 0x2C, 0x5C},
+    {0x1C, 0x4C, 0x78},
+    {0x1C, 0x4C, 0x78},
+    {0x38, 0x68, 0x90},
+    {0x38, 0x68, 0x90},
+    {0x50, 0x84, 0xAC},
+    {0x50, 0x84, 0xAC},
+    {0x68, 0x9C, 0xC0},
+    {0x68, 0x9C, 0xC0},
+    {0x7C, 0xB4, 0xD4},
+    {0x7C, 0xB4, 0xD4},
+    {0x90, 0xCC, 0xE8},
+    {0x90, 0xCC, 0xE8},
+    {0xA4, 0xE0, 0xFC},
+    {0xA4, 0xE0, 0xFC},
+    {0x00, 0x40, 0x2C},
+    {0x00, 0x40, 0x2C},
+    {0x1C, 0x5C, 0x48},
+    {0x1C, 0x5C, 0x48},
+    {0x38, 0x7C, 0x64},
+    {0x38, 0x7C, 0x64},
+    {0x50, 0x9C, 0x80},
+    {0x50, 0x9C, 0x80},
+    {0x68, 0xB4, 0x94},
+    {0x68, 0xB4, 0x94},
+    {0x7C, 0xD0, 0xAC},
+    {0x7C, 0xD0, 0xAC},
+    {0x90, 0xE4, 0xC0},
+    {0x90, 0xE4, 0xC0},
+    {0xA4, 0xFC, 0xD4},
+    {0xA4, 0xFC, 0xD4},
+    {0x00, 0x3C, 0x00},
+    {0x00, 0x3C, 0x00},
+    {0x20, 0x5C, 0x20},
+    {0x20, 0x5C, 0x20},
+    {0x40, 0x7C, 0x40},
+    {0x40, 0x7C, 0x40},
+    {0x5C, 0x9C, 0x5C},
+    {0x5C, 0x9C, 0x5C},
+    {0x74, 0xB4, 0x74},
+    {0x74, 0xB4, 0x74},
+    {0x8C, 0xD0, 0x8C},
+    {0x8C, 0xD0, 0x8C},
+    {0xA4, 0xE4, 0xA4},
+    {0xA4, 0xE4, 0xA4},
+    {0xB8, 0xFC, 0xB8},
+    {0xB8, 0xFC, 0xB8},
+    {0x14, 0x38, 0x00},
+    {0x14, 0x38, 0x00},
+    {0x34, 0x5C, 0x1C},
+    {0x34, 0x5C, 0x1C},
+    {0x50, 0x7C, 0x38},
+    {0x50, 0x7C, 0x38},
+    {0x6C, 0x98, 0x50},
+    {0x6C, 0x98, 0x50},
+    {0x84, 0xB4, 0x68},
+    {0x84, 0xB4, 0x68},
+    {0x9C, 0xCC, 0x7C},
+    {0x9C, 0xCC, 0x7C},
+    {0xB4, 0xE4, 0x90},
+    {0xB4, 0xE4, 0x90},
+    {0xC8, 0xFC, 0xA4},
+    {0xC8, 0xFC, 0xA4},
+    {0x2C, 0x30, 0x00},
+    {0x2C, 0x30, 0x00},
+    {0x4C, 0x50, 0x1C},
+    {0x4C, 0x50, 0x1C},
+    {0x68, 0x70, 0x34},
+    {0x68, 0x70, 0x34},
+    {0x84, 0x8C, 0x4C},
+    {0x84, 0x8C, 0x4C},
+    {0x9C, 0xA8, 0x64},
+    {0x9C, 0xA8, 0x64},
+    {0xB4, 0xC0, 0x78},
+    {0xB4, 0xC0, 0x78},
+    {0xCC, 0xD4, 0x88},
+    {0xCC, 0xD4, 0x88},
+    {0xE0, 0xEC, 0x9C},
+    {0xE0, 0xEC, 0x9C},
+    {0x44, 0x28, 0x00},
+    {0x44, 0x28, 0x00},
+    {0x64, 0x48, 0x18},
+    {0x64, 0x48, 0x18},
+    {0x84, 0x68, 0x30},
+    {0x84, 0x68, 0x30},
+    {0xA0, 0x84, 0x44},
+    {0xA0, 0x84, 0x44},
+    {0xB8, 0x9C, 0x58},
+    {0xB8, 0x9C, 0x58},
+    {0xD0, 0xB4, 0x6C},
+    {0xD0, 0xB4, 0x6C},
+    {0xE8, 0xCC, 0x7C},
+    {0xE8, 0xCC, 0x7C},
+    {0xFC, 0xE0, 0x8C},
+    {0xFC, 0xE0, 0x8C},
+};
+
+void create_colormap()
+{
+    // generated table from an image
+    // may one day convert color and luminance to rgb with math
+}
+
+void write_screen()
+{
+    using namespace Stella;
+
+    static int frame_number = 0;
+    static char filename[512];
+
+    sprintf(filename, "image%05d.ppm", frame_number);
+    FILE *screenfile = fopen(filename, "wb");
+    fprintf(screenfile, "P6 %d %d 255\n", visible_pixels, visible_lines);
+    for(int y = 0; y < visible_lines; y++) {
+        for(int x = 0; x < visible_pixels; x++) {
+            uint8_t colu = screen[x + y * visible_pixels];
+            uint8_t *rgb = colu_to_rgb[colu];
+            fwrite(rgb, 3, 1, screenfile);
+        }
+    }
+    fclose(screenfile);
+    printf("wrote image %s\n", filename);
+
+    frame_number++;
+}
+
+// Must be called once and only once for every clock value
+// I.e. clk must be incrementing on each call
+bool advance_one_pixel(stella &hw)
+{
+    using namespace Stella;
+    uint32_t clock_within_frame = (last_pixel_clocked - vsync_reset_clock);
+    uint32_t scanout_line = (clock_within_frame / pixels_per_line) % lines_per_frame;
+    uint32_t scanout_pixel = clock_within_frame % pixels_per_line;
+
+    bool hblank_started = (scanout_pixel == 0);
+
+    if((scanout_line >= visible_line_start) && (scanout_line < visible_line_start + visible_lines)) {
+        uint32_t visible_line = scanout_line - visible_line_start;
+        if((scanout_pixel >= hblank_pixels) && (scanout_pixel < hblank_pixels + visible_pixels)) {
+            uint32_t visible_pixel = scanout_pixel - hblank_pixels;
+            printf("pixel %d %d\n", visible_pixel, visible_line);
+            set_colu(visible_pixel, visible_line, hw.tia_write[COLUBK]); // XXX process rest of registers
+            if((visible_pixel == visible_pixels - 1) && (visible_line == visible_lines - 1)) {
+                write_screen();
             }
         }
-        last_pixel_clocked++;
     }
+
+    return hblank_started;
+}
+
+void scanout_to_current_clock(const sysclock& clk, stella &hw)
+{
+    using namespace Stella;
+    for(clk_t c = last_pixel_clocked; c < clk; c++) {
+        advance_one_pixel(hw);
+    }
+    last_pixel_clocked = clk - 1;
+}
+
+clk_t scanout_to_hsync(const sysclock& clk, stella &hw)
+{
+    using namespace Stella;
+    printf("scanout to hsync\n");
+    bool hsync_started;
+    do {
+        hsync_started = advance_one_pixel(hw);
+        last_pixel_clocked++;
+    } while(!hsync_started);
+    return last_pixel_clocked - clk;
 }
 
 std::string read_bus_and_disassemble(stella &hw, int pc)
@@ -375,6 +782,8 @@ std::string read_bus_and_disassemble(stella &hw, int pc)
 
 int main(int argc, char **argv)
 {
+    create_colormap();
+
     FILE *ROMfile = fopen(argv[1], "rb");
     if(ROMfile == nullptr) {
         std::cerr << "couldn't open " << argv[1] << " for reading.\n";
@@ -395,6 +804,13 @@ int main(int argc, char **argv)
         std::string dis = read_bus_and_disassemble(hw, cpu.pc);
         printf("%s\n", dis.c_str());
         cpu.cycle();
-        scanout_to_current_clock(clk, hw);
+        if(hw.wait_for_hsync) {
+            auto cycles = scanout_to_hsync(clk, hw);
+            clk.add_pixel_cycles(cycles);
+            hw.wait_for_hsync = false;
+        } else {
+            scanout_to_current_clock(clk, hw);
+        }
+        hw.advance_interval_timer(clk);
     }
 }
