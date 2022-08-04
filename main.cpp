@@ -6,6 +6,7 @@
 #include "cpu6502.h"
 #include "dis6502.h"
 
+
 // 0000-002C TIA (Write)
 // 0030-003D TIA (Read)
 // 0080-00FF RIOT RAM
@@ -14,87 +15,89 @@
 
 namespace Stella
 {
-    constexpr static uint16_t ROMbase = 0xF000;
-    constexpr static uint16_t address_mask = 0x0280;
-    constexpr static uint16_t RAM_select_value = 0x0080;
-    constexpr static uint16_t TIA_select_value = 0x0000;
-    constexpr static uint16_t PIA_select_value = 0x0280;
-    constexpr static uint16_t RAM_address_mask = 0x007f;
+    enum {
+         ROMbase = 0xF000,
+         address_mask = 0x0280,
+         RAM_select_value = 0x0080,
+         TIA_select_value = 0x0000,
+         PIA_select_value = 0x0280,
+         RAM_address_mask = 0x007f,
 
-    // TIA write
-    constexpr static uint16_t CXCLR = 0x002C;
-    constexpr static uint16_t HMCLR = 0x002B;
-    constexpr static uint16_t HMOVE = 0x002A;
-    constexpr static uint16_t RESMP1 = 0x0029;
-    constexpr static uint16_t RESMP0 = 0x0028;
-    constexpr static uint16_t VDELBL = 0x0027;
-    constexpr static uint16_t VDELP1 = 0x0026;
-    constexpr static uint16_t VDELP0 = 0x0025;
-    constexpr static uint16_t HMBL = 0x0024;
-    constexpr static uint16_t HMM1 = 0x0023;
-    constexpr static uint16_t HMM0 = 0x0022;
-    constexpr static uint16_t HMP1 = 0x0021;
-    constexpr static uint16_t HMP0 = 0x0020;
-    constexpr static uint16_t ENABL = 0x001F;
-    constexpr static uint16_t ENAM1 = 0x001E;
-    constexpr static uint16_t ENAM0 = 0x001D;
-    constexpr static uint16_t GRP1 = 0x001C;
-    constexpr static uint16_t GRP0 = 0x001B;
-    constexpr static uint16_t AUDV1 = 0x001A;
-    constexpr static uint16_t AUDV0 = 0x0019;
-    constexpr static uint16_t AUDF1 = 0x0018;
-    constexpr static uint16_t AUDF0 = 0x0017;
-    constexpr static uint16_t AUDC1 = 0x0016;
-    constexpr static uint16_t AUDC0 = 0x0015;
-    constexpr static uint16_t RESBL = 0x0014;
-    constexpr static uint16_t RESM1 = 0x0013;
-    constexpr static uint16_t RESM0 = 0x0012;
-    constexpr static uint16_t RESP1 = 0x0011;
-    constexpr static uint16_t RESP0 = 0x0010;
-    constexpr static uint16_t PF2 = 0x000F;
-    constexpr static uint16_t PF1 = 0x000E;
-    constexpr static uint16_t PF0 = 0x000D;
-    constexpr static uint16_t REFP1 = 0x000C;
-    constexpr static uint16_t REFP0 = 0x000B;
-    constexpr static uint16_t CTRLPF = 0x000A;
-    constexpr static uint16_t COLUBK = 0x0009;
-    constexpr static uint16_t COLUPF = 0x0008;
-    constexpr static uint16_t COLUP1 = 0x0007;
-    constexpr static uint16_t COLUP0 = 0x0006;
-    constexpr static uint16_t NUSIZ1 = 0x0005;
-    constexpr static uint16_t NUSIZ0 = 0x0004;
-    constexpr static uint16_t RSYNC = 0x0003;
-    constexpr static uint16_t WSYNC = 0x0002;
-    constexpr static uint16_t VBLANK = 0x0001;
-    constexpr static uint16_t VSYNC = 0x0000;
+        // TIA write
+         CXCLR = 0x002C,
+         HMCLR = 0x002B,
+         HMOVE = 0x002A,
+         RESMP1 = 0x0029,
+         RESMP0 = 0x0028,
+         VDELBL = 0x0027,
+         VDELP1 = 0x0026,
+         VDELP0 = 0x0025,
+         HMBL = 0x0024,
+         HMM1 = 0x0023,
+         HMM0 = 0x0022,
+         HMP1 = 0x0021,
+         HMP0 = 0x0020,
+         ENABL = 0x001F,
+         ENAM1 = 0x001E,
+         ENAM0 = 0x001D,
+         GRP1 = 0x001C,
+         GRP0 = 0x001B,
+         AUDV1 = 0x001A,
+         AUDV0 = 0x0019,
+         AUDF1 = 0x0018,
+         AUDF0 = 0x0017,
+         AUDC1 = 0x0016,
+         AUDC0 = 0x0015,
+         RESBL = 0x0014,
+         RESM1 = 0x0013,
+         RESM0 = 0x0012,
+         RESP1 = 0x0011,
+         RESP0 = 0x0010,
+         PF2 = 0x000F,
+         PF1 = 0x000E,
+         PF0 = 0x000D,
+         REFP1 = 0x000C,
+         REFP0 = 0x000B,
+         CTRLPF = 0x000A,
+         COLUBK = 0x0009,
+         COLUPF = 0x0008,
+         COLUP1 = 0x0007,
+         COLUP0 = 0x0006,
+         NUSIZ1 = 0x0005,
+         NUSIZ0 = 0x0004,
+         RSYNC = 0x0003,
+         WSYNC = 0x0002,
+         VBLANK = 0x0001,
+         VSYNC = 0x0000,
 
-    // TIA read
-    constexpr static uint16_t CXM0P = 0x30;
-    constexpr static uint16_t CXM1P = 0x31;
-    constexpr static uint16_t CXP0FB = 0x32;
-    constexpr static uint16_t CXP1FB = 0x33;
-    constexpr static uint16_t CXM0FB = 0x34;
-    constexpr static uint16_t CXM1FB = 0x35;
-    constexpr static uint16_t CXBLPF = 0x36;
-    constexpr static uint16_t CXPPMM = 0x37;
-    constexpr static uint16_t INPT0 = 0x38;
-    constexpr static uint16_t INPT1 = 0x39;
-    constexpr static uint16_t INPT2 = 0x3A;
-    constexpr static uint16_t INPT3 = 0x3B;
-    constexpr static uint16_t INPT4 = 0x3C;
-    constexpr static uint16_t INPT5 = 0x3D;
+        // TIA read
+         CXM0P = 0x30,
+         CXM1P = 0x31,
+         CXP0FB = 0x32,
+         CXP1FB = 0x33,
+         CXM0FB = 0x34,
+         CXM1FB = 0x35,
+         CXBLPF = 0x36,
+         CXPPMM = 0x37,
+         INPT0 = 0x38,
+         INPT1 = 0x39,
+         INPT2 = 0x3A,
+         INPT3 = 0x3B,
+         INPT4 = 0x3C,
+         INPT5 = 0x3D,
 
-    // PIA
-    constexpr static uint16_t SWCHA = 0x00;
-    constexpr static uint16_t SWACNT = 0x01;
-    constexpr static uint16_t SWCHB = 0x02;
-    constexpr static uint16_t SWBCNT = 0x03;
-    constexpr static uint16_t INTIM = 0x04;
-    constexpr static uint16_t INSTAT = 0x05;
-    constexpr static uint16_t TIM1T = 0x14;
-    constexpr static uint16_t TIM8T = 0x15;
-    constexpr static uint16_t TIM64T = 0x16;
-    constexpr static uint16_t T1024T = 0x17;
+        // PIA
+         SWCHA = 0x00,
+         SWACNT = 0x01,
+         SWCHB = 0x02,
+         SWBCNT = 0x03,
+         INTIM = 0x04,
+         INSTAT = 0x05,
+         TIM1T = 0x14,
+         TIM8T = 0x15,
+         TIM64T = 0x16,
+         T1024T = 0x17,
+    };
 };
 
 typedef uint64_t clk_t;
@@ -330,6 +333,33 @@ struct stella
     }
 };
 
+clk_t last_pixel_clocked;
+
+void scanout_to_current_clock(sysclock& clk, stella &hw)
+{
+    static constexpr uint32_t vsync_lines = 3;
+    static constexpr uint32_t vblank_lines = 37;
+    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
+    static constexpr uint32_t visible_lines = 192;
+    static constexpr uint32_t hblank_pixels = 68;
+    static constexpr uint32_t visible_pixels = 160;
+    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
+
+    while(last_pixel_clocked < clk - 1) {
+        uint32_t clock_within_frame = (last_pixel_clocked - vsync_reset_clock);
+        uint32_t scanout_line = clock_within_frame / pixels_per_line;
+        uint32_t scanout_pixel = clock_within_frame % pixels_per_line;
+        if((scanout_line >= visible_line_start) && (scanout_line < visible_line_start + visible_lines)) {
+            uint32_t visible_line = scanout_line - visible_line_start;
+            if((scanout_pixel >= hblank_pixels) && (scanout_pixel < hblank_pixels + visible_pixels)) {
+                uint32_t visible_pixel = scanout_pixel - hblank_pixels;
+                printf("%d %d\n", visible_pixel, visible_line);
+            }
+        }
+        last_pixel_clocked++;
+    }
+}
+
 std::string read_bus_and_disassemble(stella &hw, int pc)
 {
     int bytes;
@@ -365,5 +395,6 @@ int main(int argc, char **argv)
         std::string dis = read_bus_and_disassemble(hw, cpu.pc);
         printf("%s\n", dis.c_str());
         cpu.cycle();
+        scanout_to_current_clock(clk, hw);
     }
 }
