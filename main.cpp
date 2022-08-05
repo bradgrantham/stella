@@ -913,23 +913,19 @@ struct stella
                 if(data & VSYNC_SET) {
                     pixel_clock_within_frame = 0;
                     // write_screen();
-                    printf("call Frame\n");
                     PlatformInterface::Frame(screen, 1.0f);
-                    printf("returned from Frame\n");
                 }
             } else if(addr == CXCLR) {
                 printf("wrote %02X to CXCLR\n", data);
                 // reset collision latches
             } else if(addr == HMCLR) {
                 // Reset all 5 HM registers to 0
-                printf("wrote %02X to HMCLR\n", data);
                 tia_write[HMBL] = 0;
                 tia_write[HMM1] = 0;
                 tia_write[HMM0] = 0;
                 tia_write[HMP1] = 0;
                 tia_write[HMP0] = 0;
             } else if(addr == HMOVE) {
-                printf("wrote %02X to HMOVE\n", data);
                 // Apply the HM variables, move players, missles, and ball
                 mobP0 = (mobP0 + get_signed_move(tia_write[HMP0])) % 160;
                 mobP1 = (mobP1 + get_signed_move(tia_write[HMP1])) % 160;
