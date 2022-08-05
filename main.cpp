@@ -479,7 +479,6 @@ static void HandleEvents(void)
     }
 }
 
-
 void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
 {
     using namespace std::chrono_literals;
@@ -636,7 +635,7 @@ namespace Stella
 
     int get_signed_move(uint8_t HM)
     {
-        uint8_t motion = HM >> 4;
+        int motion = HM >> 4U;
         if(motion > 7) {
             motion -= 16;
         }
@@ -685,14 +684,14 @@ typedef uint64_t clk_t;
 
 uint32_t pixel_clock_within_frame = 0;
 
-uint8_t current_horizontal_clock()
+uint8_t current_horizontal_clock(int if_in_hblank)
 {
     using namespace Stella;
     // Could use a value incremented and reset from advance_one_pixel
 
     uint32_t pixel_within_line = pixel_clock_within_frame % pixels_per_line;
 
-    return (pixel_within_line < 68) ? 0 : (pixel_within_line - 68);
+    return (pixel_within_line < 68) ? if_in_hblank : (pixel_within_line - 68);
 }
 
 struct sysclock // When I called this "clock" XCode errored out because I shadowed MacOSX's "clock"
@@ -927,11 +926,12 @@ struct stella
                 tia_write[HMP0] = 0;
             } else if(addr == HMOVE) {
                 // Apply the HM variables, move players, missles, and ball
-                mobP0 = (mobP0 + get_signed_move(tia_write[HMP0])) % 160;
-                mobP1 = (mobP1 + get_signed_move(tia_write[HMP1])) % 160;
-                mobM0 = (mobM0 + get_signed_move(tia_write[HMM0])) % 160;
-                mobM1 = (mobM1 + get_signed_move(tia_write[HMM1])) % 160;
-                mobBL = (mobBL + get_signed_move(tia_write[HMBL])) % 160;
+                printf("HMOVE: mobP0 was %d, signed move %d, becomes %d\n", mobP0, get_signed_move(tia_write[HMP0]), (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160);
+                mobP0 = (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160;
+                mobP1 = (mobP1 + get_signed_move(tia_write[HMP1]) + 160) % 160;
+                mobM0 = (mobM0 + get_signed_move(tia_write[HMM0]) + 160) % 160;
+                mobM1 = (mobM1 + get_signed_move(tia_write[HMM1]) + 160) % 160;
+                mobBL = (mobBL + get_signed_move(tia_write[HMBL]) + 160) % 160;
             } else if(addr == RESMP1) {
                 // XXX handle hid/lock bit
                 mobM0 = mobP0;
@@ -980,15 +980,17 @@ struct stella
             } else if(addr == AUDC0) {
                 // audio control 0 skip
             } else if(addr == RESBL) {
-                mobBL = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
+                mobBL = current_horizontal_clock(2);
             } else if(addr == RESM1) {
-                mobM1 = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
+                mobM1 = current_horizontal_clock(2);
             } else if(addr == RESM0) { 
-                mobM0 = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
+                mobM0 = current_horizontal_clock(2);
             } else if(addr == RESP1) {
-                mobP1 = std::max(hblank_pixels + 3, (uint32_t)current_horizontal_clock());
+                mobP1 = current_horizontal_clock(3);
+                printf("RESP1: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP1);
             } else if(addr == RESP0) {
-                mobP0 = std::max(hblank_pixels + 3, (uint32_t)current_horizontal_clock());
+                mobP0 = current_horizontal_clock(3);
+                printf("RESP0: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP0);
             } else if(addr == PF2) {
                 tia_write[PF2] = data;
             } else if(addr == PF1) {
@@ -1055,11 +1057,12 @@ struct stella
         return (tia_write[PF2] >> (playfield_bit_number - 12)) & 0x01;
     }
     
-    int get_player_bit(uint8_t x, uint8_t mob, uint8_t grp, uint8_t nusiz, uint8_t refp)
+    int get_player_bit(int x, uint8_t mob, uint8_t grp, uint8_t nusiz, uint8_t refp)
     {
         int bit;
+        // printf("get_player_bit(%d, %d, %02X, %02X, %02X)\n", x, mob, grp, nusiz, refp);
 
-        switch(nusiz & 7) {
+        switch(nusiz & 0x7) {
             case 0: /* X......... */
                 if(x >= mob && x < mob + 8) {
                     bit = x - mob;
@@ -1132,10 +1135,11 @@ struct stella
                 break;
         }
 
-        if(refp) {
+        if(!refp) {
             bit = 7 - bit;
         }
 
+        // printf("bit = %d\n", bit);
         return (grp >> bit) & 1;
     }
 
@@ -1152,13 +1156,17 @@ struct stella
         if(pf) {
             color = tia_write[COLUPF];
         }
-        int p0 = get_player_bit(x, mobP0, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
-        if(p0) {
-            color = tia_write[COLUP0];
+        if(tia_write[GRP0] != 0) {
+            int p0 = get_player_bit(x, mobP0, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
+            if(p0) {
+                color = tia_write[COLUP0];
+            }
         }
-        int p1 = get_player_bit(x, mobP1, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
-        if(p1) {
-            color = tia_write[COLUP1];
+        if(tia_write[GRP1] != 0) {
+            int p1 = get_player_bit(x, mobP1, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
+            if(p1) {
+                color = tia_write[COLUP1];
+            }
         }
         // XXX process rest of registers
         return color;
