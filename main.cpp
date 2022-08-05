@@ -279,7 +279,7 @@ void create_colormap()
 
 static constexpr int SCREEN_SCALE = 2;
 
-bool switch_state[8];
+bool switch_state[8] = {false, false, false, true, false, false, false, false};
 
 void set_switch(int sw, bool state)
 {
@@ -375,7 +375,7 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
 
 static void HandleEvents(void)
 {
-    static bool switch_status[10];
+    static bool switch_status[10] = {false, false, false, true, false, false, false, false, false, false};
     static bool shift_pressed = false;
     SDL_Event event;
 
@@ -399,6 +399,7 @@ static void HandleEvents(void)
                         break;
                     case SDL_SCANCODE_1:
                         switch_status[0] = ! switch_status[0];
+                        set_switch(0, switch_status[0]);
                         break;
                     case SDL_SCANCODE_2:
                         switch_status[1] = ! switch_status[1];
@@ -632,6 +633,16 @@ namespace Stella
     static constexpr uint32_t visible_pixels = 160;
     static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
     static constexpr uint32_t clocks_per_frame = lines_per_frame * pixels_per_line;
+
+    int get_signed_move(uint8_t HM)
+    {
+        uint8_t motion = HM >> 4;
+        if(motion > 7) {
+            motion -= 16;
+        }
+        return -motion;
+    }
+
 };
 
 uint8_t screen[228 * 262];
@@ -672,9 +683,19 @@ void write_screen()
 
 typedef uint64_t clk_t;
 
-clk_t pixel_clock_within_frame = 0;
+uint32_t pixel_clock_within_frame = 0;
 
-struct sysclock // If I called this "clock" XCode would error out because I shadowed MacOSX's "clock"
+uint8_t current_horizontal_clock()
+{
+    using namespace Stella;
+    // Could use a value incremented and reset from advance_one_pixel
+
+    uint32_t pixel_within_line = pixel_clock_within_frame % pixels_per_line;
+
+    return (pixel_within_line < 68) ? 0 : (pixel_within_line - 68);
+}
+
+struct sysclock // When I called this "clock" XCode errored out because I shadowed MacOSX's "clock"
 {
     clk_t clock = 0;
     operator clk_t() const { return clock; }
@@ -702,6 +723,12 @@ struct stella
     std::vector<uint8_t> ROM;
     uint16_t ROM_address_mask;
     sysclock& clk;
+
+    uint8_t mobP0 = 0;
+    uint8_t mobP1 = 0;
+    uint8_t mobM0 = 0;
+    uint8_t mobM1 = 0;
+    uint8_t mobBL = 0;
 
     uint32_t interval_timer = 0;
     uint32_t interval_timer_value = 0;
@@ -904,13 +931,17 @@ struct stella
             } else if(addr == HMOVE) {
                 printf("wrote %02X to HMOVE\n", data);
                 // Apply the HM variables, move players, missles, and ball
+                mobP0 = (mobP0 + get_signed_move(tia_write[HMP0])) % 160;
+                mobP1 = (mobP1 + get_signed_move(tia_write[HMP1])) % 160;
+                mobM0 = (mobM0 + get_signed_move(tia_write[HMM0])) % 160;
+                mobM1 = (mobM1 + get_signed_move(tia_write[HMM1])) % 160;
+                mobBL = (mobBL + get_signed_move(tia_write[HMBL])) % 160;
             } else if(addr == RESMP1) {
-                printf("wrote %02X to RESMP1\n", data);
-                // XXX reset missle 1 to player 1 and hide missle
+                // XXX handle hid/lock bit
+                mobM0 = mobP0;
             } else if(addr == RESMP0) {
-                printf("wrote %02X to RESMP0\n", data);
-                // XXX reset missle 0 to player 0 and hide missle
-                tia_write[RESMP0] = data;
+                // XXX handle hid/lock bit
+                mobM1 = mobP1;
             } else if(addr == VDELBL) {
                 tia_write[VDELBL] = data;
             } else if(addr == VDELP1) {
@@ -953,15 +984,15 @@ struct stella
             } else if(addr == AUDC0) {
                 // audio control 0 skip
             } else if(addr == RESBL) {
-                // XXX set ball to current horizontal
+                mobBL = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
             } else if(addr == RESM1) {
-                // XXX set missile 1 to current horizontal
+                mobM1 = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
             } else if(addr == RESM0) { 
-                // XXX set missile 0 to current horizontal
+                mobM0 = std::max(hblank_pixels + 2, (uint32_t)current_horizontal_clock());
             } else if(addr == RESP1) {
-                // XXX set player 1 to current horizontal
+                mobP1 = std::max(hblank_pixels + 3, (uint32_t)current_horizontal_clock());
             } else if(addr == RESP0) {
-                // XXX set player 0 to current horizontal
+                mobP0 = std::max(hblank_pixels + 3, (uint32_t)current_horizontal_clock());
             } else if(addr == PF2) {
                 tia_write[PF2] = data;
             } else if(addr == PF1) {
@@ -1020,12 +1051,96 @@ struct stella
             }
         }
         if(playfield_bit_number < 4) {
-            return (tia_write[PF0] >> (4+playfield_bit_number)) & 0x01;
+            return (tia_write[PF0] >> (4 + playfield_bit_number)) & 0x01;
         }
         if(playfield_bit_number < 12) {
             return (tia_write[PF1] >> (11 - playfield_bit_number)) & 0x01;
         }
         return (tia_write[PF2] >> (playfield_bit_number - 12)) & 0x01;
+    }
+    
+    int get_player_bit(uint8_t x, uint8_t mob, uint8_t grp, uint8_t nusiz, uint8_t refp)
+    {
+        int bit;
+
+        switch(nusiz & 7) {
+            case 0: /* X......... */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 1: /* X.Y....... */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else if(x >= mob + 16 && x < mob + 16 + 8) {
+                    bit = x - 16 - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 2: /* X...Y..... */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else if(x >= mob + 32 && x < mob + 32 + 8) {
+                    bit = x - 32 - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 3: /* X.Y.Z..... */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else if(x >= mob + 16 && x < mob + 16 + 8) {
+                    bit = x - 16 - mob;
+                } else if(x >= mob + 32 && x < mob + 32 + 8) {
+                    bit = x - 32 - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 4: /* X.......Y. */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else if(x >= mob + 64 && x < mob + 64 + 8) {
+                    bit = x - 64 - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 5: /* XX........ */
+                if(x >= mob && x < mob + 16) {
+                    bit = (x - mob) / 2;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 6: /* X...Y...Z. */
+                if(x >= mob && x < mob + 8) {
+                    bit = x - mob;
+                } else if(x >= mob + 32 && x < mob + 32 + 8) {
+                    bit = x - 16 - mob;
+                } else if(x >= mob + 64 && x < mob + 64 + 8) {
+                    bit = x - 32 - mob;
+                } else  {
+                    return 0;
+                }
+                break;
+            case 7: /* XXXX...... */
+                if(x >= mob && x < mob + 16) {
+                    bit = (x - mob) / 4;
+                } else  {
+                    return 0;
+                }
+                break;
+        }
+
+        if(refp) {
+            bit = 7 - bit;
+        }
+
+        return (grp >> bit) & 1;
     }
 
     uint8_t process_TIA_to_pixel(int x)
@@ -1040,6 +1155,14 @@ struct stella
         // XXX playfield and ball can be over players and missles if CTRLPF & 0x4, so need to handle that later
         if(pf) {
             color = tia_write[COLUPF];
+        }
+        int p0 = get_player_bit(x, mobP0, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
+        if(p0) {
+            color = tia_write[COLUP0];
+        }
+        int p1 = get_player_bit(x, mobP1, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
+        if(p1) {
+            color = tia_write[COLUP1];
         }
         // XXX process rest of registers
         return color;
