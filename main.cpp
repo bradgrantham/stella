@@ -279,6 +279,13 @@ void create_colormap()
 
 static constexpr int SCREEN_SCALE = 2;
 
+bool switch_state[8];
+
+void set_switch(int sw, bool state)
+{
+    switch_state[sw] = state;
+}
+
 SDL_AudioDeviceID audio_device;
 bool audio_needs_start = true;
 SDL_AudioFormat actual_audio_format;
@@ -368,6 +375,7 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
 
 static void HandleEvents(void)
 {
+    static bool switch_status[10];
     static bool shift_pressed = false;
     SDL_Event event;
 
@@ -388,6 +396,37 @@ static void HandleEvents(void)
                     case SDL_SCANCODE_RSHIFT:
                     case SDL_SCANCODE_LSHIFT:
                         shift_pressed = true;
+                        break;
+                    case SDL_SCANCODE_1:
+                        switch_status[0] = ! switch_status[0];
+                        break;
+                    case SDL_SCANCODE_2:
+                        switch_status[1] = ! switch_status[1];
+                        set_switch(1, switch_status[1]);
+                        break;
+                    case SDL_SCANCODE_3:
+                        switch_status[2] = ! switch_status[2];
+                        set_switch(2, switch_status[2]);
+                        break;
+                    case SDL_SCANCODE_4:
+                        switch_status[3] = ! switch_status[3];
+                        set_switch(3, switch_status[3]);
+                        break;
+                    case SDL_SCANCODE_5:
+                        switch_status[4] = ! switch_status[4];
+                        set_switch(4, switch_status[4]);
+                        break;
+                    case SDL_SCANCODE_6:
+                        switch_status[5] = ! switch_status[5];
+                        set_switch(5, switch_status[5]);
+                        break;
+                    case SDL_SCANCODE_7:
+                        switch_status[6] = ! switch_status[6];
+                        set_switch(6, switch_status[6]);
+                        break;
+                    case SDL_SCANCODE_8:
+                        switch_status[7] = ! switch_status[7];
+                        set_switch(7, switch_status[7]);
                         break;
                     case SDL_SCANCODE_W:
                         // joy1 up
@@ -654,6 +693,8 @@ struct stella
     enum {
         DEBUG_TIA = 0x0001,
         DEBUG_TIMER = 0x0002,
+        DEBUG_PIA = 0x0004,
+        DEBUG_RAM = 0x0008,
     };
     static constexpr uint32_t debug = 0;
 
@@ -788,13 +829,21 @@ struct stella
                 return 0x0;
             }
         } else if(isPIA(addr)) {
-            printf("read from PIA %04X\n", addr);
+            if(debug & DEBUG_PIA) { printf("read from PIA %04X\n", addr); }
             addr &= 0x1F;
             if(addr == SWCHB) {
-                return 0x0;
+                return
+                    (PlatformInterface::switch_state[0] << 0) | 
+                    (PlatformInterface::switch_state[1] << 1) | 
+                    (PlatformInterface::switch_state[2] << 2) | 
+                    (PlatformInterface::switch_state[3] << 3) | 
+                    (PlatformInterface::switch_state[4] << 4) | 
+                    (PlatformInterface::switch_state[5] << 5) | 
+                    (PlatformInterface::switch_state[6] << 6) | 
+                    (PlatformInterface::switch_state[7] << 7);
             } else if(addr == INTIM) {
                 uint8_t data = interval_timer / interval_timer_prescaler;
-                printf("read interval timer, %2X\n", data);
+                if(debug & DEBUG_TIMER) { printf("read interval timer, %2X\n", data); }
                 return data;
             } else if(addr == SWCHA) {
                 printf("read joystick bits\n");
@@ -813,7 +862,7 @@ struct stella
         using namespace Stella;
         if(isRAM(addr)) {
             RAM[addr & RAM_address_mask] = data;
-            printf("wrote %02X to RAM %04X\n", data, addr);
+            if(debug & DEBUG_RAM) { printf("wrote %02X to RAM %04X\n", data, addr); }
         } else if(isPIA(addr)) {
             printf("wrote %02X to PIA %04X\n", data, addr);
             addr &= 0x1F;
@@ -1080,7 +1129,7 @@ int main(int argc, char **argv)
     cpu.reset();
     while(1) {
         std::string dis = read_bus_and_disassemble(hw, cpu.pc);
-        printf("%s\n", dis.c_str());
+        // printf("%s\n", dis.c_str());
         cpu.cycle();
         if(hw.wait_for_hsync) {
             auto cycles = scanout_to_hsync(clk, hw);
