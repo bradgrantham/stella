@@ -881,49 +881,53 @@ struct stella
             return data;
         } else if(isTIA(addr)) {
             if(debug & DEBUG_TIA) { printf("read from TIA %04X\n", addr); }
-            addr &= 0xF;
-            if(addr == INPT5) {
+            uint16_t reg = addr & 0xF;
+            if(reg == INPT5) {
                 // read latched or unlatched input port 5
                 uint8_t inpt5 = 0;
                 uint8_t swcha, player0button, player1button;
                 std::tie(swcha, player0button, player1button) = PlatformInterface::ReadJoysticks();
                 inpt5 |= player1button;
                 return inpt5;
-            } else if(addr == INPT4) {
+            } else if(reg == INPT4) {
                 // read latched or unlatched input port 4
                 uint8_t inpt4 = 0;
                 uint8_t swcha, player0button, player1button;
                 std::tie(swcha, player0button, player1button) = PlatformInterface::ReadJoysticks();
                 inpt4 |= player0button;
                 return inpt4;
-            } else if(addr == INPT3) {
+            } else if(reg == INPT3) {
                 // read latched or unlatched input port 3
                 return 0x0;
-            } else if(addr == INPT2) {
+            } else if(reg == INPT2) {
                 // read latched or unlatched input port 2
                 return 0x0;
-            } else if(addr == INPT1) {
+            } else if(reg == INPT1) {
                 // read latched or unlatched input port 1
                 return 0x0;
-            } else if(addr == INPT0) {
+            } else if(reg == INPT0) {
                 // read latched or unlatched input port 0
                 return 0x0;
-            } else if(addr == CXM0P) {
+            } else if(reg == CXM0P) {
                 return tia_read[CXM0P];
-            } else if(addr == CXM1P) {
+            } else if(reg == CXM1P) {
                 return tia_read[CXM1P];
-            } else if(addr == CXP0FB) {
+            } else if(reg == CXP0FB) {
                 return tia_read[CXP0FB];
-            } else if(addr == CXP1FB) {
+            } else if(reg == CXP1FB) {
                 return tia_read[CXP1FB];
-            } else if(addr == CXM0FB) {
+            } else if(reg == CXM0FB) {
                 return tia_read[CXM0FB];
-            } else if(addr == CXM1FB) {
+            } else if(reg == CXM1FB) {
                 return tia_read[CXM1FB];
-            } else if(addr == CXBLPF) {
+            } else if(reg == CXBLPF) {
                 return tia_read[CXBLPF];
-            } else if(addr == CXPPMM) {
+            } else if(reg == CXPPMM) {
                 return tia_read[CXPPMM];
+            } else {
+                printf("unhandled read from TIA at %04X\n", addr);
+                // abort();
+                return 0x00;
             }
         } else if(isPIA(addr)) {
             if(debug & DEBUG_PIA) { printf("read from PIA %04X\n", addr); }
@@ -937,6 +941,7 @@ struct stella
                 return data;
             } else if(addr == INSTAT) {
                 uint8_t data = timer_interrupt ? 0x80 : 0;
+                timer_interrupt = false;
                 if(debug & DEBUG_TIMER) { printf("read interval status, %2X\n", data); }
                 return data;
             } else if(addr == SWCHA) {
