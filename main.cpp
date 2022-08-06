@@ -7,7 +7,151 @@
 #include "cpu6502.h"
 #include "dis6502.h"
 
+// 1 key toggles TV Type, starts as Color
+// 2 key momentaries Reset
+// 3 key momentaries Game Type
+// 4 key toggles P0 difficulty, starts as A
+// 5 key toggles P1 difficulty, starts as A
+
 #include <SDL2/SDL.h>
+
+// 0000-002C TIA (Write)
+// 0030-003D TIA (Read)
+// 0080-00FF RIOT RAM
+// 0280-0297 RIOT I/O, TIMER
+// F000-FFFF ROM
+
+namespace Stella
+{
+    enum {
+        ROMbase = 0xF000,
+        address_mask = 0x0280,
+        RAM_select_value = 0x0080,
+        TIA_select_value = 0x0000,
+        PIA_select_value = 0x0280,
+        RAM_address_mask = 0x007f,
+
+       // TIA write
+        CXCLR = 0x002C,
+        HMCLR = 0x002B,
+        HMOVE = 0x002A,
+        RESMP1 = 0x0029,
+        RESMP0 = 0x0028,
+        VDELBL = 0x0027,
+        VDELP1 = 0x0026,
+        VDELP0 = 0x0025,
+        HMBL = 0x0024,
+        HMM1 = 0x0023,
+        HMM0 = 0x0022,
+        HMP1 = 0x0021,
+        HMP0 = 0x0020,
+        ENABL = 0x001F,
+        ENAM1 = 0x001E,
+        ENAM0 = 0x001D,
+        GRP1 = 0x001C,
+        GRP0 = 0x001B,
+        AUDV1 = 0x001A,
+        AUDV0 = 0x0019,
+        AUDF1 = 0x0018,
+        AUDF0 = 0x0017,
+        AUDC1 = 0x0016,
+        AUDC0 = 0x0015,
+        RESBL = 0x0014,
+        RESM1 = 0x0013,
+        RESM0 = 0x0012,
+        RESP1 = 0x0011,
+        RESP0 = 0x0010,
+        PF2 = 0x000F,
+        PF1 = 0x000E,
+        PF0 = 0x000D,
+        REFP1 = 0x000C,
+        REFP0 = 0x000B,
+        CTRLPF = 0x000A,
+        COLUBK = 0x0009,
+        COLUPF = 0x0008,
+        COLUP1 = 0x0007,
+        COLUP0 = 0x0006,
+        NUSIZ1 = 0x0005,
+        NUSIZ0 = 0x0004,
+        RSYNC = 0x0003,
+        WSYNC = 0x0002,
+        VBLANK = 0x0001,
+        VSYNC = 0x0000,
+
+        VSYNC_SET = 0x02,
+
+        CTRLPF_REFLECT_PLAYFIELD = 0x01,
+        CTRLPF_SCORE_MODE = 0x02,
+        CTRLPF_PLAYFIELD_ABOVE = 0x04,
+
+       // TIA read
+        CXM0P = 0x00,
+        CXM1P = 0x01,
+        CXP0FB = 0x02,
+        CXP1FB = 0x03,
+        CXM0FB = 0x04,
+        CXM1FB = 0x05,
+        CXBLPF = 0x06,
+        CXPPMM = 0x07,
+        INPT0 = 0x08,
+        INPT1 = 0x09,
+        INPT2 = 0x0A,
+        INPT3 = 0x0B,
+        INPT4 = 0x0C,
+        INPT5 = 0x0D,
+
+       // PIA
+        SWCHA = 0x00,
+        SWACNT = 0x01,
+        SWCHB = 0x02,
+        SWBCNT = 0x03,
+        INTIM = 0x04,
+        INSTAT = 0x05,
+        TIM1T = 0x14,
+        TIM8T = 0x15,
+        TIM64T = 0x16,
+        T1024T = 0x17,
+
+        SWCHA_JOYSTICK0_UP = 0x10,
+        SWCHA_JOYSTICK0_DOWN = 0x20,
+        SWCHA_JOYSTICK0_LEFT = 0x40,
+        SWCHA_JOYSTICK0_RIGHT = 0x80,
+        INPT4_JOYSTICK0_BUTTON = 0x80,
+        SWCHA_JOYSTICK1_UP = 0x01,
+        SWCHA_JOYSTICK1_DOWN = 0x02,
+        SWCHA_JOYSTICK1_LEFT = 0x04,
+        SWCHA_JOYSTICK1_RIGHT = 0x05,
+        INPT5_JOYSTICK1_BUTTON = 0x80,
+
+        SWCHB_RESET_SWITCH = 0x01,
+        SWCHB_SELECT_SWITCH = 0x02,
+        SWCHB_TVTYPE_SWITCH = 0x08,
+        SWCHB_P0_DIFFICULTY_SWITCH = 0x40,
+        SWCHB_P1_DIFFICULTY_SWITCH = 0x80,
+    };
+
+    static constexpr uint32_t vsync_lines = 3;
+    static constexpr uint32_t vblank_lines = 37;
+    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
+    static constexpr uint32_t visible_lines = 192;
+    static constexpr uint32_t overscan_lines = 30;
+    static constexpr uint32_t lines_per_frame = (vsync_lines + vblank_lines + visible_lines + overscan_lines);
+    static constexpr uint32_t hblank_pixels = 68;
+    static constexpr uint32_t visible_pixels = 160;
+    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
+    static constexpr uint32_t clocks_per_frame = lines_per_frame * pixels_per_line;
+
+    int get_signed_move(uint8_t HM)
+    {
+        int motion = HM >> 4U;
+        if(motion > 7) {
+            motion -= 16;
+        }
+        return -motion;
+    }
+
+};
+
 
 namespace PlatformInterface
 {
@@ -279,11 +423,23 @@ void create_colormap()
 
 static constexpr int SCREEN_SCALE = 2;
 
-bool switch_state[8] = {false, false, false, true, false, false, false, false};
+uint8_t SWCHB_value =
+    Stella::SWCHB_RESET_SWITCH | 
+    Stella::SWCHB_SELECT_SWITCH | 
+    Stella::SWCHB_TVTYPE_SWITCH;
 
-void set_switch(int sw, bool state)
+uint8_t ReadConsoleSwitches()
 {
-    switch_state[sw] = state;
+    return SWCHB_value;
+}
+
+// SWCHA and then player0button and player1button
+uint8_t SWCHA_value;
+uint8_t player0button; // as shows up in INPT4, 0x00 if pressed, 0x80 if not pressed.
+uint8_t player1button; // as shows up in INPT5, 0x00 if pressed, 0x80 if not pressed.
+std::tuple<uint8_t, bool, bool> ReadJoysticks()
+{
+    return std::make_tuple(SWCHA_value, player0button, player1button);
 }
 
 SDL_AudioDeviceID audio_device;
@@ -373,9 +529,20 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
     previous_event_time = std::chrono::system_clock::now();
 }
 
+enum {
+    SWITCH_TV_TYPE,
+    SWITCH_P0_DIFFICULTY,
+    SWITCH_P1_DIFFICULTY,
+    SWITCH_GAME_TYPE,
+    SWITCH_RESET,
+};
+
 static void HandleEvents(void)
 {
-    static bool switch_status[10] = {false, false, false, true, false, false, false, false, false, false};
+    using namespace Stella;
+    static bool switch_tv_type = true; // true = color
+    static bool switch_p0_difficulty = false; // true = color
+    static bool switch_p1_difficulty = false;
     static bool shift_pressed = false;
     SDL_Event event;
 
@@ -397,55 +564,50 @@ static void HandleEvents(void)
                     case SDL_SCANCODE_LSHIFT:
                         shift_pressed = true;
                         break;
-                    case SDL_SCANCODE_1:
-                        switch_status[0] = ! switch_status[0];
-                        set_switch(0, switch_status[0]);
-                        break;
-                    case SDL_SCANCODE_2:
-                        switch_status[1] = ! switch_status[1];
-                        set_switch(1, switch_status[1]);
-                        break;
-                    case SDL_SCANCODE_3:
-                        switch_status[2] = ! switch_status[2];
-                        set_switch(2, switch_status[2]);
-                        break;
-                    case SDL_SCANCODE_4:
-                        switch_status[3] = ! switch_status[3];
-                        set_switch(3, switch_status[3]);
-                        break;
-                    case SDL_SCANCODE_5:
-                        switch_status[4] = ! switch_status[4];
-                        set_switch(4, switch_status[4]);
-                        break;
-                    case SDL_SCANCODE_6:
-                        switch_status[5] = ! switch_status[5];
-                        set_switch(5, switch_status[5]);
-                        break;
-                    case SDL_SCANCODE_7:
-                        switch_status[6] = ! switch_status[6];
-                        set_switch(6, switch_status[6]);
-                        break;
-                    case SDL_SCANCODE_8:
-                        switch_status[7] = ! switch_status[7];
-                        set_switch(7, switch_status[7]);
-                        break;
                     case SDL_SCANCODE_W:
-                        // joy1 up
-                        break;
-                    case SDL_SCANCODE_A:
-                        // joy1 left
+                        SWCHA_value &= (~Stella::SWCHA_JOYSTICK0_UP);
                         break;
                     case SDL_SCANCODE_S:
-                        // joy1 down
+                        SWCHA_value &= (~Stella::SWCHA_JOYSTICK0_DOWN);
+                        break;
+                    case SDL_SCANCODE_A:
+                        SWCHA_value &= (~Stella::SWCHA_JOYSTICK0_LEFT);
                         break;
                     case SDL_SCANCODE_D:
-                        // joy1 right
+                        SWCHA_value &= (~Stella::SWCHA_JOYSTICK0_RIGHT);
                         break;
                     case SDL_SCANCODE_SPACE:
-                        // joy1 button
+                        player0button = (uint8_t)~Stella::INPT4_JOYSTICK0_BUTTON;
                         break;
-                    case SDL_SCANCODE_RETURN:
-                        // joy2 button
+                    case SDL_SCANCODE_1:
+                        switch_tv_type = !switch_tv_type;
+                        if(switch_tv_type) {
+                            SWCHB_value |= SWCHB_TVTYPE_SWITCH;
+                        } else {
+                            SWCHB_value &= ~SWCHB_TVTYPE_SWITCH;
+                        }
+                        break;
+                    case SDL_SCANCODE_2:
+                        SWCHB_value &= ~SWCHB_RESET_SWITCH;
+                        break;
+                    case SDL_SCANCODE_3:
+                        SWCHB_value &= ~SWCHB_SELECT_SWITCH;
+                        break;
+                    case SDL_SCANCODE_4:
+                        switch_p0_difficulty = !switch_p0_difficulty;
+                        if(switch_p0_difficulty) {
+                            SWCHB_value |= SWCHB_P0_DIFFICULTY_SWITCH;
+                        } else {
+                            SWCHB_value &= ~SWCHB_P0_DIFFICULTY_SWITCH;
+                        }
+                        break;
+                    case SDL_SCANCODE_5:
+                        switch_p1_difficulty = !switch_p1_difficulty;
+                        if(switch_p1_difficulty) {
+                            SWCHB_value |= SWCHB_P1_DIFFICULTY_SWITCH;
+                        } else {
+                            SWCHB_value &= ~SWCHB_P1_DIFFICULTY_SWITCH;
+                        }
                         break;
                     default:
                         break;
@@ -457,15 +619,26 @@ static void HandleEvents(void)
                     case SDL_SCANCODE_LSHIFT:
                         shift_pressed = false;
                         break;
-                    case SDL_SCANCODE_W:
+                    case SDL_SCANCODE_2:
+                        SWCHB_value |= SWCHB_RESET_SWITCH;
                         break;
-                    case SDL_SCANCODE_A:
+                    case SDL_SCANCODE_3:
+                        SWCHB_value |= SWCHB_SELECT_SWITCH;
+                        break;
+                    case SDL_SCANCODE_W:
+                        SWCHA_value |= Stella::SWCHA_JOYSTICK0_UP;
                         break;
                     case SDL_SCANCODE_S:
+                        SWCHA_value |= Stella::SWCHA_JOYSTICK0_DOWN;
+                        break;
+                    case SDL_SCANCODE_A:
+                        SWCHA_value |= Stella::SWCHA_JOYSTICK0_LEFT;
                         break;
                     case SDL_SCANCODE_D:
+                        SWCHA_value |= Stella::SWCHA_JOYSTICK0_RIGHT;
                         break;
                     case SDL_SCANCODE_SPACE:
+                        player0button = Stella::INPT4_JOYSTICK0_BUTTON;
                         break;
                     case SDL_SCANCODE_RETURN:
                         break;
@@ -521,126 +694,6 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
     SDL_RenderPresent(renderer);
     SDL_DestroyTexture(texture);
 }
-
-};
-
-// 0000-002C TIA (Write)
-// 0030-003D TIA (Read)
-// 0080-00FF RIOT RAM
-// 0280-0297 RIOT I/O, TIMER
-// F000-FFFF ROM
-
-namespace Stella
-{
-    enum {
-         ROMbase = 0xF000,
-         address_mask = 0x0280,
-         RAM_select_value = 0x0080,
-         TIA_select_value = 0x0000,
-         PIA_select_value = 0x0280,
-         RAM_address_mask = 0x007f,
-
-        // TIA write
-         CXCLR = 0x002C,
-         HMCLR = 0x002B,
-         HMOVE = 0x002A,
-         RESMP1 = 0x0029,
-         RESMP0 = 0x0028,
-         VDELBL = 0x0027,
-         VDELP1 = 0x0026,
-         VDELP0 = 0x0025,
-         HMBL = 0x0024,
-         HMM1 = 0x0023,
-         HMM0 = 0x0022,
-         HMP1 = 0x0021,
-         HMP0 = 0x0020,
-         ENABL = 0x001F,
-         ENAM1 = 0x001E,
-         ENAM0 = 0x001D,
-         GRP1 = 0x001C,
-         GRP0 = 0x001B,
-         AUDV1 = 0x001A,
-         AUDV0 = 0x0019,
-         AUDF1 = 0x0018,
-         AUDF0 = 0x0017,
-         AUDC1 = 0x0016,
-         AUDC0 = 0x0015,
-         RESBL = 0x0014,
-         RESM1 = 0x0013,
-         RESM0 = 0x0012,
-         RESP1 = 0x0011,
-         RESP0 = 0x0010,
-         PF2 = 0x000F,
-         PF1 = 0x000E,
-         PF0 = 0x000D,
-         REFP1 = 0x000C,
-         REFP0 = 0x000B,
-         CTRLPF = 0x000A,
-         COLUBK = 0x0009,
-         COLUPF = 0x0008,
-         COLUP1 = 0x0007,
-         COLUP0 = 0x0006,
-         NUSIZ1 = 0x0005,
-         NUSIZ0 = 0x0004,
-         RSYNC = 0x0003,
-         WSYNC = 0x0002,
-         VBLANK = 0x0001,
-         VSYNC = 0x0000,
-
-         VSYNC_SET = 0x02,
-
-         CTRLPF_REFLECT_PLAYFIELD = 0x01,
-         CTRLPF_SCORE_MODE = 0x02,
-         CTRLPF_PLAYFIELD_ABOVE = 0x04,
-
-        // TIA read
-         CXM0P = 0x00,
-         CXM1P = 0x01,
-         CXP0FB = 0x02,
-         CXP1FB = 0x03,
-         CXM0FB = 0x04,
-         CXM1FB = 0x05,
-         CXBLPF = 0x06,
-         CXPPMM = 0x07,
-         INPT0 = 0x08,
-         INPT1 = 0x09,
-         INPT2 = 0x0A,
-         INPT3 = 0x0B,
-         INPT4 = 0x0C,
-         INPT5 = 0x0D,
-
-        // PIA
-         SWCHA = 0x00,
-         SWACNT = 0x01,
-         SWCHB = 0x02,
-         SWBCNT = 0x03,
-         INTIM = 0x04,
-         INSTAT = 0x05,
-         TIM1T = 0x14,
-         TIM8T = 0x15,
-         TIM64T = 0x16,
-         T1024T = 0x17,
-    };
-
-    static constexpr uint32_t vsync_lines = 3;
-    static constexpr uint32_t vblank_lines = 37;
-    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
-    static constexpr uint32_t visible_lines = 192;
-    static constexpr uint32_t overscan_lines = 30;
-    static constexpr uint32_t lines_per_frame = (vsync_lines + vblank_lines + visible_lines + overscan_lines);
-    static constexpr uint32_t hblank_pixels = 68;
-    static constexpr uint32_t visible_pixels = 160;
-    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
-    static constexpr uint32_t clocks_per_frame = lines_per_frame * pixels_per_line;
-
-    int get_signed_move(uint8_t HM)
-    {
-        int motion = HM >> 4U;
-        if(motion > 7) {
-            motion -= 16;
-        }
-        return -motion;
-    }
 
 };
 
@@ -796,7 +849,6 @@ struct stella
         using namespace Stella;
         return (addr & address_mask) == RAM_select_value;
     }
-
     uint8_t read(uint16_t addr)
     {
         using namespace Stella;
@@ -813,10 +865,18 @@ struct stella
             addr &= 0xF;
             if(addr == INPT5) {
                 // read latched or unlatched input port 5
-                return 0x0;
+                uint8_t inpt5 = 0;
+                uint8_t swcha, player0button, player1button;
+                std::tie(swcha, player0button, player1button) = PlatformInterface::ReadJoysticks();
+                inpt5 |= player1button;
+                return inpt5;
             } else if(addr == INPT4) {
                 // read latched or unlatched input port 4
-                return 0x0;
+                uint8_t inpt4 = 0;
+                uint8_t swcha, player0button, player1button;
+                std::tie(swcha, player0button, player1button) = PlatformInterface::ReadJoysticks();
+                inpt4 |= player0button;
+                return inpt4;
             } else if(addr == INPT3) {
                 // read latched or unlatched input port 3
                 return 0x0;
@@ -858,22 +918,15 @@ struct stella
             if(debug & DEBUG_PIA) { printf("read from PIA %04X\n", addr); }
             addr &= 0x1F;
             if(addr == SWCHB) {
-                return
-                    (PlatformInterface::switch_state[0] << 0) | 
-                    (PlatformInterface::switch_state[1] << 1) | 
-                    (PlatformInterface::switch_state[2] << 2) | 
-                    (PlatformInterface::switch_state[3] << 3) | 
-                    (PlatformInterface::switch_state[4] << 4) | 
-                    (PlatformInterface::switch_state[5] << 5) | 
-                    (PlatformInterface::switch_state[6] << 6) | 
-                    (PlatformInterface::switch_state[7] << 7);
+                return PlatformInterface::ReadConsoleSwitches();
             } else if(addr == INTIM) {
                 uint8_t data = interval_timer / interval_timer_prescaler;
                 if(debug & DEBUG_TIMER) { printf("read interval timer, %2X\n", data); }
                 return data;
             } else if(addr == SWCHA) {
-                printf("read joystick bits\n");
-                return 0x0;
+                uint8_t swcha, player0button, player1button;
+                std::tie(swcha, player0button, player1button) = PlatformInterface::ReadJoysticks();
+                return swcha;
             } else {
                 printf("unhandled read from PIA %04X\n", addr);
                 abort();
@@ -926,7 +979,7 @@ struct stella
                 tia_write[HMP0] = 0;
             } else if(addr == HMOVE) {
                 // Apply the HM variables, move players, missles, and ball
-                printf("HMOVE: mobP0 was %d, signed move %d, becomes %d\n", mobP0, get_signed_move(tia_write[HMP0]), (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160);
+                // printf("HMOVE: mobP0 was %d, signed move %d, becomes %d\n", mobP0, get_signed_move(tia_write[HMP0]), (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160);
                 mobP0 = (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160;
                 mobP1 = (mobP1 + get_signed_move(tia_write[HMP1]) + 160) % 160;
                 mobM0 = (mobM0 + get_signed_move(tia_write[HMM0]) + 160) % 160;
@@ -987,10 +1040,10 @@ struct stella
                 mobM0 = current_horizontal_clock(2);
             } else if(addr == RESP1) {
                 mobP1 = current_horizontal_clock(3);
-                printf("RESP1: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP1);
+                // printf("RESP1: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP1);
             } else if(addr == RESP0) {
                 mobP0 = current_horizontal_clock(3);
-                printf("RESP0: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP0);
+                // printf("RESP0: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP0);
             } else if(addr == PF2) {
                 tia_write[PF2] = data;
             } else if(addr == PF1) {
