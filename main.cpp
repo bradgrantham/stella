@@ -81,6 +81,8 @@ namespace Stella
         VSYNC_SET = 0x02,
         VBLANK_ENABLED = 0x02,
 
+        REFP_REFLECT = 0x08,
+
         CTRLPF_REFLECT_PLAYFIELD = 0x01,
         CTRLPF_SCORE_MODE = 0x02,
         CTRLPF_PLAYFIELD_ABOVE = 0x04,
@@ -121,7 +123,7 @@ namespace Stella
         SWCHA_JOYSTICK1_UP = 0x01,
         SWCHA_JOYSTICK1_DOWN = 0x02,
         SWCHA_JOYSTICK1_LEFT = 0x04,
-        SWCHA_JOYSTICK1_RIGHT = 0x05,
+        SWCHA_JOYSTICK1_RIGHT = 0x08,
         INPT5_JOYSTICK1_BUTTON = 0x80,
 
         SWCHB_RESET_SWITCH = 0x01,
@@ -435,9 +437,12 @@ uint8_t ReadConsoleSwitches()
 }
 
 // SWCHA and then player0button and player1button
-uint8_t SWCHA_value;
-uint8_t player0button; // as shows up in INPT4, 0x00 if pressed, 0x80 if not pressed.
-uint8_t player1button; // as shows up in INPT5, 0x00 if pressed, 0x80 if not pressed.
+// The joystick values are set when not pressed
+uint8_t SWCHA_value =
+    Stella::SWCHA_JOYSTICK0_UP | Stella::SWCHA_JOYSTICK0_DOWN | Stella::SWCHA_JOYSTICK0_LEFT | Stella::SWCHA_JOYSTICK0_RIGHT |
+    Stella::SWCHA_JOYSTICK1_UP | Stella::SWCHA_JOYSTICK1_DOWN | Stella::SWCHA_JOYSTICK1_LEFT | Stella::SWCHA_JOYSTICK1_RIGHT;
+uint8_t player0button = 0x80; // as shows up in INPT4, 0x00 if pressed, 0x80 if not pressed.
+uint8_t player1button = 0x80; // as shows up in INPT5, 0x00 if pressed, 0x80 if not pressed.
 std::tuple<uint8_t, bool, bool> ReadJoysticks()
 {
     return std::make_tuple(SWCHA_value, player0button, player1button);
@@ -698,14 +703,6 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
 
 };
 
-uint8_t screen[228 * 262];
-
-void set_colu(int x, int y, uint8_t colu)
-{
-    using namespace Stella;
-    screen[x + y * clocks_per_line] = colu;
-}
-
 #if 0
 void write_screen()
 {
@@ -773,21 +770,52 @@ struct stella
     uint8_t M1counter = 0;
     uint8_t BLcounter = 0;
 
-    uint32_t interval_timer = 0;
-    uint32_t interval_timer_value = 0;
+    uint32_t interval_timer_subcounter = 2;
     uint32_t interval_timer_prescaler = 1;
+    uint32_t interval_timer_counter = 0;
+    uint32_t interval_timer = 0;
     bool timer_interrupt = false;
+
+    uint8_t screen[228 * 262];
+
+    void set_colu(int x, int y, uint8_t colu)
+    {
+        using namespace Stella;
+        screen[x + y * clocks_per_line] = colu;
+    }
 
     void set_interval_timer(int prescaler, uint8_t value)
     {
         interval_timer_prescaler = prescaler;
-        interval_timer_value = value * prescaler;
+        interval_timer_subcounter = prescaler - 1;
         if(value == 0) {
-            interval_timer = 0xFF * prescaler;
+            interval_timer = 0xFF;
         } else {
-            interval_timer = (value - 1) * prescaler;
+            interval_timer = value - 1;
         }
+        // printf("set_interval_timer %d and scaler %d\n", value, prescaler);
         timer_interrupt = false;
+    }
+
+    void advance_interval_timer()
+    {
+        if(interval_timer_subcounter > 0) {
+            interval_timer_subcounter--;
+        } else {
+            interval_timer_subcounter = 2;
+            if(interval_timer_counter > 0) {
+                interval_timer_counter--;
+            } else {
+                interval_timer_counter = interval_timer_prescaler - 1;
+                if(interval_timer == 0) {
+                    timer_interrupt = true;
+                    interval_timer = 0xFF;
+                } else {
+                    interval_timer--;
+                }
+                if(debug & DEBUG_TIMER) { printf("timer now %d\n", interval_timer); }
+            }
+        }
     }
 
     void advance_counters(bool in_hblank)
@@ -802,21 +830,11 @@ struct stella
         }
     }
 
-    void advance_interval_timer()
-    {
-        if(interval_timer == 0) {
-            timer_interrupt = true;
-            interval_timer = 0xFF * interval_timer_prescaler;
-        } else {
-            interval_timer--;
-        }
-        if(debug & DEBUG_TIMER) { printf("timer now %d\n", interval_timer); }
-    }
-
     uint8_t tia_write[64];
     uint8_t tia_read[64];
     bool wait_for_hsync = false;
     bool vsync_enabled = false;
+    bool mark_cpu_wait = true;
 
     stella(const std::vector<uint8_t>& ROM, sysclock& clock) :
         ROM(std::move(ROM)),
@@ -830,6 +848,7 @@ struct stella
             std::cout << "dunno about ROM size " << ROM.size() << "\n";
             abort();
         }
+        memset(screen, 0, sizeof(screen));
     }
 
     bool isPIA(uint16_t addr)
@@ -920,13 +939,13 @@ struct stella
             if(addr == SWCHB) {
                 return PlatformInterface::ReadConsoleSwitches();
             } else if(addr == INTIM) {
-                uint8_t data = interval_timer / interval_timer_prescaler;
+                uint8_t data = interval_timer;
                 timer_interrupt = false;
                 if(debug & DEBUG_TIMER) { printf("read interval timer, %2X\n", data); }
                 return data;
             } else if(addr == INSTAT) {
                 uint8_t data = timer_interrupt ? 0x80 : 0;
-                /* if(debug & DEBUG_TIMER) */ { printf("read interval status, %2X\n", data); }
+                if(debug & DEBUG_TIMER) { printf("read interval status, %2X\n", data); }
                 return data;
             } else if(addr == SWCHA) {
                 uint8_t swcha, player0button, player1button;
@@ -948,7 +967,7 @@ struct stella
             RAM[addr & RAM_address_mask] = data;
             if(debug & DEBUG_RAM) { printf("wrote %02X to RAM %04X\n", data, addr); }
         } else if(isPIA(addr)) {
-            printf("wrote %02X to PIA %04X\n", data, addr);
+            // printf("wrote %02X to PIA %04X\n", data, addr);
             addr &= 0x1F;
             if(addr == TIM1T) {
                 set_interval_timer(1, data);
@@ -961,131 +980,134 @@ struct stella
             }
             // XXX TODO
         } else if(isTIA(addr)) {
-            addr &= 0x3F;
-            if(addr == VSYNC) {
+            uint8_t reg = addr & 0x3F;
+            if(reg == VSYNC) {
                 if(debug & DEBUG_TIA) { printf("wrote %02X to VSYNC\n", data); }
                 if(data & VSYNC_SET) {
+                    printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
                     vsync_enabled = true;
                 } else {
                     if(vsync_enabled) {
+                        printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
                         scanline = 0;
                         // write_screen();
                         PlatformInterface::Frame(screen, 1.0f);
                         vsync_enabled = false;
                     }
                 }
-            } else if(addr == CXCLR) {
+            } else if(reg == CXCLR) {
                 printf("wrote %02X to CXCLR\n", data);
                 // reset collision latches
-            } else if(addr == HMCLR) {
+            } else if(reg == HMCLR) {
                 // Reset all 5 motion registers to 0
                 tia_write[HMBL] = 0;
                 tia_write[HMM1] = 0;
                 tia_write[HMM0] = 0;
                 tia_write[HMP1] = 0;
                 tia_write[HMP0] = 0;
-            } else if(addr == HMOVE) {
+            } else if(reg == HMOVE) {
                 // Apply the motion registers to players, missles, and ball
                 P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + visible_pixels) % visible_pixels;
                 P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + visible_pixels) % visible_pixels;
                 M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + visible_pixels) % visible_pixels;
                 M1counter = (M1counter + get_signed_move(tia_write[HMM1]) + visible_pixels) % visible_pixels;
                 BLcounter = (BLcounter + get_signed_move(tia_write[HMBL]) + visible_pixels) % visible_pixels;
-            } else if(addr == RESMP1) {
+            } else if(reg == RESMP1) {
                 // XXX handle hid/lock bit
                 M0counter = P0counter;
-            } else if(addr == RESMP0) {
+            } else if(reg == RESMP0) {
                 // XXX handle hid/lock bit
                 M1counter = P1counter;
-            } else if(addr == VDELBL) {
+            } else if(reg == VDELBL) {
                 tia_write[VDELBL] = data;
-            } else if(addr == VDELP1) {
+            } else if(reg == VDELP1) {
                 tia_write[VDELP1] = data;
-            } else if(addr == VDELP0) {
+            } else if(reg == VDELP0) {
                 tia_write[VDELP0] = data;
-            } else if(addr == HMBL) {
+            } else if(reg == HMBL) {
                 tia_write[HMBL] = data;
-            } else if(addr == HMM1) {
+            } else if(reg == HMM1) {
                 tia_write[HMM1] = data;
-            } else if(addr == HMM0) {
+            } else if(reg == HMM0) {
                 tia_write[HMM0] = data;
-            } else if(addr == HMP1) {
+            } else if(reg == HMP1) {
                 tia_write[HMP1] = data;
-            } else if(addr == HMP0) {
+            } else if(reg == HMP0) {
                 tia_write[HMP0] = data;
-            } else if(addr == ENABL) {
+            } else if(reg == ENABL) {
                 // XXX when writing, might need to check VDELBL and hold this until GRP1 is set
                 tia_write[ENABL] = data;
-            } else if(addr == ENAM1) {
+            } else if(reg == ENAM1) {
                 tia_write[ENAM1] = data;
-            } else if(addr == ENAM0) {
+            } else if(reg == ENAM0) {
                 tia_write[ENAM0] = data;
-            } else if(addr == GRP1) {
+            } else if(reg == GRP1) {
                 // XXX when writing, might need to check VDELP1 and hold this until GRP0 is set
                 tia_write[GRP1] = data;
-            } else if(addr == GRP0) {
+            } else if(reg == GRP0) {
                 // XXX when writing, might need to check VDELP0 and hold this until GRP1 is set
                 tia_write[GRP0] = data;
-            } else if(addr == AUDV1) {
+            } else if(reg == AUDV1) {
                 // audio control - skip
-            } else if(addr == AUDV0) {
+            } else if(reg == AUDV0) {
                 // audio control - skip
-            } else if(addr == AUDF1) {
+            } else if(reg == AUDF1) {
                 // audio control - skip
-            } else if(addr == AUDF0) {
+            } else if(reg == AUDF0) {
                 // audio control - skip
-            } else if(addr == AUDC1) {
+            } else if(reg == AUDC1) {
                 // audio control - skip
-            } else if(addr == AUDC0) {
+            } else if(reg == AUDC0) {
                 // audio control - skip
-            } else if(addr == RESBL) {
-                BLcounter = 0;
-            } else if(addr == RESM1) {
-                M1counter = 0;
-            } else if(addr == RESM0) { 
-                M0counter = 0;
-            } else if(addr == RESP1) {
-                P1counter = 0;
-            } else if(addr == RESP0) {
-                P0counter = 0;
-            } else if(addr == PF2) {
+            } else if(reg == RESBL) {
+                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+            } else if(reg == RESM1) {
+                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+            } else if(reg == RESM0) { 
+                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+            } else if(reg == RESP1) {
+                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : 0;
+            } else if(reg == RESP0) {
+                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : 0;
+            } else if(reg == PF2) {
                 tia_write[PF2] = data;
-            } else if(addr == PF1) {
+            } else if(reg == PF1) {
                 tia_write[PF1] = data;
-            } else if(addr == PF0) {
+            } else if(reg == PF0) {
                 tia_write[PF0] = data;
-            } else if(addr == REFP1) {
+            } else if(reg == REFP1) {
                 tia_write[REFP1] = data;
-            } else if(addr == REFP0) {
+            } else if(reg == REFP0) {
                 tia_write[REFP0] = data;
-            } else if(addr == CTRLPF) {
+            } else if(reg == CTRLPF) {
                 tia_write[CTRLPF] = data;
-            } else if(addr == COLUBK) {
+            } else if(reg == COLUBK) {
                 tia_write[COLUBK] = data;
-            } else if(addr == COLUPF) {
+            } else if(reg == COLUPF) {
                 tia_write[COLUPF] = data;
-            } else if(addr == COLUP1) {
+            } else if(reg == COLUP1) {
                 tia_write[COLUP1] = data;
-            } else if(addr == COLUP0) {
+            } else if(reg == COLUP0) {
                 tia_write[COLUP0] = data;
-            } else if(addr == NUSIZ0) {
+            } else if(reg == NUSIZ0) {
                 tia_write[NUSIZ0] = data;
-            } else if(addr == NUSIZ1) {
+            } else if(reg == NUSIZ1) {
                 tia_write[NUSIZ1] = data;
-            } else if(addr == RSYNC) {
+            } else if(reg == RSYNC) {
                 /* ignored, resets hsync for testing */
-            } else if(addr == WSYNC) {
+            } else if(reg == WSYNC) {
                 // printf("write %d to WSYNC\n", data); 
                 wait_for_hsync = true;
-            } else if(addr == VBLANK) {
+            } else if(reg == VBLANK) {
+                tia_write[VBLANK] = data;
                 // printf("write %d to VBLANK\n", data); 
-            } else if(addr == 0x2D) {
+            } else if(reg == 0x2D) {
                 // ignore
-            } else if(addr == 0x2E) {
+            } else if(reg == 0x2E) {
                 // ignore
-            } else if(addr == 0x2F) {
+            } else if(reg == 0x2F) {
                 // ignore
-            } else if((addr >= 0x30) && (addr <= 0x3F)) {
+            } else if((reg >= 0x30) && (reg <= 0x3F)) {
                 // ignore
             }
         } else {
@@ -1116,6 +1138,11 @@ struct stella
     
     int get_player_bit(uint8_t counter, uint8_t grp, uint8_t nusiz, uint8_t refp)
     {
+        using namespace Stella;
+        
+        // XXX This can't be right, but it's what I measured...
+        // counter = (counter - 24 + 160) % 160;
+
         bool replicateY = false;
         bool replicateZ = false;
         int offsetYZ = 16;
@@ -1152,30 +1179,29 @@ struct stella
                 break;
         }
 
-        int bit;
+        int bit_index;
         if((counter >> shift) < 8) {
-            bit = counter >> shift;
+            bit_index = counter >> shift;
         } else if(replicateY && ((counter - offsetYZ) < 8)) {
-            bit = counter - offsetYZ;
+            bit_index = counter - offsetYZ;
         } else if(replicateZ && ((counter - offsetYZ * 2) < 8)) {
-            bit = counter - offsetYZ * 2;
+            bit_index = counter - offsetYZ * 2;
         } else {
             return 0;
         }
 
-        if(!refp) {
-            bit = 7 - bit;
+        if(refp & REFP_REFLECT) {
+            return (grp >> bit_index) & 0x01;
+        } else {
+            return (grp << bit_index) & 0x80;
         }
-
-        return (grp >> bit) & 1;
     }
 
-    uint8_t get_pixel()
+    uint8_t do_pixel_work()
     {
         using namespace Stella;
 
         bool within_vblank = tia_write[VBLANK] & VBLANK_ENABLED;
-
         if(within_vblank) {
             return 0x00; // BLACK
         }
@@ -1183,8 +1209,9 @@ struct stella
         // Background
         uint8_t color = tia_write[COLUBK];
 
-        if(horizontal_clock < hblank_pixels) {
-            return color;
+        bool within_hblank = horizontal_clock < hblank_pixels;
+        if(within_hblank) {
+            return 0x00; // color;
         }
 
         int x = horizontal_clock - hblank_pixels;
@@ -1229,13 +1256,17 @@ struct stella
 
     // Must be called once and only once for every clock value
     // I.e. clk must be incrementing on each call
-    bool advance_one_clock()
+    bool advance_one_clock(bool mark_cpu_wait)
     {
         using namespace Stella;
 
         bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < hblank_pixels);
 
-        int color = get_pixel();
+        int color = do_pixel_work();
+
+        if(mark_cpu_wait) {
+            color = 0x0F;
+        }
 
         set_colu(horizontal_clock, scanline, color);
 
@@ -1258,7 +1289,7 @@ struct stella
     {
         using namespace Stella;
         for(clk_t c = last_pixel_clocked; c < clk; c++) {
-            advance_one_clock();
+            advance_one_clock(false);
         }
         last_pixel_clocked = clk;
     }
@@ -1267,11 +1298,15 @@ struct stella
     {
         using namespace Stella;
         bool hsync_started;
-        do {
-            hsync_started = advance_one_clock();
+        hsync_started = advance_one_clock(mark_cpu_wait);
+
+        while(!hsync_started) {
+            hsync_started = advance_one_clock(false);
         } while(!hsync_started);
+
         auto clocks = last_pixel_clocked - clk;
         last_pixel_clocked = clk;
+
         wait_for_hsync = false;
         return clocks;
     }
@@ -1296,6 +1331,10 @@ int main(int argc, char **argv)
     size_t preferredAudioBufferSizeBytes;
     PlatformInterface::Start(stereoU8SampleRate, preferredAudioBufferSizeBytes);
 
+    if(argc < 2) {
+        fprintf(stderr, "usage: %s cartridge-rom-file\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
     FILE *ROMfile = fopen(argv[1], "rb");
     if(ROMfile == nullptr) {
         std::cerr << "couldn't open " << argv[1] << " for reading.\n";
