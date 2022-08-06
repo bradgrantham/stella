@@ -834,7 +834,7 @@ struct stella
     uint8_t tia_read[64];
     bool wait_for_hsync = false;
     bool vsync_enabled = false;
-    bool mark_cpu_wait = true;
+    bool mark_cpu_wait = false;
 
     stella(const std::vector<uint8_t>& ROM, sysclock& clock) :
         ROM(std::move(ROM)),
@@ -909,29 +909,21 @@ struct stella
                 // read latched or unlatched input port 0
                 return 0x0;
             } else if(addr == CXM0P) {
-                printf("read collision flags for missile 0 and players\n");
-                return 0x0;
+                return tia_read[CXM0P];
             } else if(addr == CXM1P) {
-                printf("read collision flags for missile 1 and players\n");
-                return 0x0;
+                return tia_read[CXM1P];
             } else if(addr == CXP0FB) {
-                printf("read collision flags for player 0 and playfield and ball\n");
-                return 0x0;
+                return tia_read[CXP0FB];
             } else if(addr == CXP1FB) {
-                printf("read collision flags for player 1 and playfield and ball\n");
-                return 0x0;
+                return tia_read[CXP1FB];
             } else if(addr == CXM0FB) {
-                printf("read collision flags for missile 0 and playfield and ball\n");
-                return 0x0;
+                return tia_read[CXM0FB];
             } else if(addr == CXM1FB) {
-                printf("read collision flags for missile 1 and playfield and ball\n");
-                return 0x0;
+                return tia_read[CXM1FB];
             } else if(addr == CXBLPF) {
-                printf("read collision flags for ball and playfield\n");
-                return 0x0;
+                return tia_read[CXBLPF];
             } else if(addr == CXPPMM) {
-                printf("read collision flags for player collision and missile collision\n");
-                return 0x0;
+                return tia_read[CXPPMM];
             }
         } else if(isPIA(addr)) {
             if(debug & DEBUG_PIA) { printf("read from PIA %04X\n", addr); }
@@ -984,11 +976,11 @@ struct stella
             if(reg == VSYNC) {
                 if(debug & DEBUG_TIA) { printf("wrote %02X to VSYNC\n", data); }
                 if(data & VSYNC_SET) {
-                    printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
+                    // printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
                     vsync_enabled = true;
                 } else {
                     if(vsync_enabled) {
-                        printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
+                        // printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
                         scanline = 0;
                         // write_screen();
                         PlatformInterface::Frame(screen, 1.0f);
@@ -996,8 +988,15 @@ struct stella
                     }
                 }
             } else if(reg == CXCLR) {
-                printf("wrote %02X to CXCLR\n", data);
                 // reset collision latches
+                tia_read[CXM0P] = 0;
+                tia_read[CXM1P] = 0;
+                tia_read[CXP0FB] = 0;
+                tia_read[CXP1FB] = 0;
+                tia_read[CXM0FB] = 0;
+                tia_read[CXM1FB] = 0;
+                tia_read[CXBLPF] = 0;
+                tia_read[CXPPMM] = 0;
             } else if(reg == HMCLR) {
                 // Reset all 5 motion registers to 0
                 tia_write[HMBL] = 0;
@@ -1234,7 +1233,14 @@ struct stella
 
         // Missiles
 
-        // Balls
+        int m0 = 0;
+        int m1 = 0;
+
+        // Ball
+
+        int bl = 0;
+
+        // XXX process rest of registers
 
         // Priority
         // XXX read and use priority register
@@ -1248,7 +1254,31 @@ struct stella
         if(p1) {
             color = tia_write[COLUP1];
         }
-        // XXX process rest of registers
+
+        // Collision
+        tia_read[CXM0P] |=
+            ((m0 && p1) ? 0x80 : 0) |
+            ((m0 && p0) ? 0x40 : 0);
+        tia_read[CXM1P] |=
+            ((m1 && p0) ? 0x80 : 0) |
+            ((m1 && p1) ? 0x40 : 0);
+        tia_read[CXP0FB] |=
+            ((p0 && pf) ? 0x80 : 0) |
+            ((p0 && bl) ? 0x40 : 0);
+        tia_read[CXP1FB] |=
+            ((p1 && pf) ? 0x80 : 0) |
+            ((p1 && bl) ? 0x40 : 0);
+        tia_read[CXM0FB] |=
+            ((m0 && pf) ? 0x80 : 0) |
+            ((m0 && bl) ? 0x40 : 0);
+        tia_read[CXM1FB] |=
+            ((m1 && pf) ? 0x80 : 0) |
+            ((m1 && bl) ? 0x40 : 0);
+        tia_read[CXBLPF] |=
+            ((bl && pf) ? 0x80 : 0);
+        tia_read[CXPPMM] |=
+            ((p0 && p1) ? 0x80 : 0) |
+            ((m0 && m1) ? 0x40 : 0);
         return color;
     }
 
