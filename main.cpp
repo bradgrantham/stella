@@ -147,7 +147,7 @@ namespace Stella
         if(motion > 7) {
             motion -= 16;
         }
-        return -motion;
+        return motion;
     }
 
 };
@@ -776,11 +776,11 @@ struct stella
     uint16_t ROM_address_mask;
     sysclock& clk;
 
-    uint8_t mobP0 = 0;
-    uint8_t mobP1 = 0;
-    uint8_t mobM0 = 0;
-    uint8_t mobM1 = 0;
-    uint8_t mobBL = 0;
+    uint8_t P0counter = 0;
+    uint8_t P1counter = 0;
+    uint8_t M0counter = 0;
+    uint8_t M1counter = 0;
+    uint8_t BLcounter = 0;
 
     uint32_t interval_timer = 0;
     uint32_t interval_timer_value = 0;
@@ -796,6 +796,17 @@ struct stella
             interval_timer = 0xFF * prescaler;
         } else {
             interval_timer = (value - 1) * prescaler;
+        }
+    }
+
+    void advance_counters(bool in_hblank)
+    {
+        if(!in_hblank) {
+            P0counter = (P0counter + 1) % 160;
+            P1counter = (P1counter + 1) % 160;
+            M0counter = (M0counter + 1) % 160;
+            M1counter = (M1counter + 1) % 160;
+            BLcounter = (BLcounter + 1) % 160;
         }
     }
 
@@ -979,18 +990,17 @@ struct stella
                 tia_write[HMP0] = 0;
             } else if(addr == HMOVE) {
                 // Apply the HM variables, move players, missles, and ball
-                // printf("HMOVE: mobP0 was %d, signed move %d, becomes %d\n", mobP0, get_signed_move(tia_write[HMP0]), (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160);
-                mobP0 = (mobP0 + get_signed_move(tia_write[HMP0]) + 160) % 160;
-                mobP1 = (mobP1 + get_signed_move(tia_write[HMP1]) + 160) % 160;
-                mobM0 = (mobM0 + get_signed_move(tia_write[HMM0]) + 160) % 160;
-                mobM1 = (mobM1 + get_signed_move(tia_write[HMM1]) + 160) % 160;
-                mobBL = (mobBL + get_signed_move(tia_write[HMBL]) + 160) % 160;
+                P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + 160) % 160;
+                P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + 160) % 160;
+                M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + 160) % 160;
+                M1counter = (M1counter + get_signed_move(tia_write[HMM1]) + 160) % 160;
+                BLcounter = (BLcounter + get_signed_move(tia_write[HMBL]) + 160) % 160;
             } else if(addr == RESMP1) {
                 // XXX handle hid/lock bit
-                mobM0 = mobP0;
+                M0counter = P0counter;
             } else if(addr == RESMP0) {
                 // XXX handle hid/lock bit
-                mobM1 = mobP1;
+                M1counter = P1counter;
             } else if(addr == VDELBL) {
                 tia_write[VDELBL] = data;
             } else if(addr == VDELP1) {
@@ -1021,29 +1031,27 @@ struct stella
                 // XXX when writing, might need to check VDELP0 and hold this until GRP1 is set
                 tia_write[GRP0] = data;
             } else if(addr == AUDV1) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == AUDV0) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == AUDF1) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == AUDF0) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == AUDC1) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == AUDC0) {
-                // audio control 0 skip
+                // audio control - skip
             } else if(addr == RESBL) {
-                mobBL = current_horizontal_clock(2);
+                BLcounter = 0;
             } else if(addr == RESM1) {
-                mobM1 = current_horizontal_clock(2);
+                M1counter = 0;
             } else if(addr == RESM0) { 
-                mobM0 = current_horizontal_clock(2);
+                M0counter = 0;
             } else if(addr == RESP1) {
-                mobP1 = current_horizontal_clock(3);
-                // printf("RESP1: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP1);
+                P1counter = 0;
             } else if(addr == RESP0) {
-                mobP0 = current_horizontal_clock(3);
-                // printf("RESP0: hclk %d, becomes %d\n", current_horizontal_clock(3), mobP0);
+                P0counter = 0;
             } else if(addr == PF2) {
                 tia_write[PF2] = data;
             } else if(addr == PF1) {
@@ -1110,82 +1118,53 @@ struct stella
         return (tia_write[PF2] >> (playfield_bit_number - 12)) & 0x01;
     }
     
-    int get_player_bit(int x, uint8_t mob, uint8_t grp, uint8_t nusiz, uint8_t refp)
+    int get_player_bit(uint8_t counter, uint8_t grp, uint8_t nusiz, uint8_t refp)
     {
-        int bit;
-        // printf("get_player_bit(%d, %d, %02X, %02X, %02X)\n", x, mob, grp, nusiz, refp);
+        bool replicateY = false;
+        bool replicateZ = false;
+        int offsetYZ = 16;
+        bool shift = 0;
 
         switch(nusiz & 0x7) {
             case 0: /* X......... */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else  {
-                    return 0;
-                }
                 break;
             case 1: /* X.Y....... */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else if(x >= mob + 16 && x < mob + 16 + 8) {
-                    bit = x - 16 - mob;
-                } else  {
-                    return 0;
-                }
+                replicateY = true;
                 break;
             case 2: /* X...Y..... */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else if(x >= mob + 32 && x < mob + 32 + 8) {
-                    bit = x - 32 - mob;
-                } else  {
-                    return 0;
-                }
+                replicateY = true;
+                offsetYZ = 32;
                 break;
             case 3: /* X.Y.Z..... */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else if(x >= mob + 16 && x < mob + 16 + 8) {
-                    bit = x - 16 - mob;
-                } else if(x >= mob + 32 && x < mob + 32 + 8) {
-                    bit = x - 32 - mob;
-                } else  {
-                    return 0;
-                }
+                replicateY = true;
+                replicateZ = true;
                 break;
             case 4: /* X.......Y. */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else if(x >= mob + 64 && x < mob + 64 + 8) {
-                    bit = x - 64 - mob;
-                } else  {
-                    return 0;
-                }
+                replicateY = true;
+                offsetYZ = 64;
                 break;
             case 5: /* XX........ */
-                if(x >= mob && x < mob + 16) {
-                    bit = (x - mob) / 2;
-                } else  {
-                    return 0;
-                }
+                shift = 1;
                 break;
             case 6: /* X...Y...Z. */
-                if(x >= mob && x < mob + 8) {
-                    bit = x - mob;
-                } else if(x >= mob + 32 && x < mob + 32 + 8) {
-                    bit = x - 16 - mob;
-                } else if(x >= mob + 64 && x < mob + 64 + 8) {
-                    bit = x - 32 - mob;
-                } else  {
-                    return 0;
-                }
+                replicateY = true;
+                replicateZ = true;
+                offsetYZ = 32;
                 break;
             case 7: /* XXXX...... */
-                if(x >= mob && x < mob + 16) {
-                    bit = (x - mob) / 4;
-                } else  {
-                    return 0;
-                }
+                shift = 2;
                 break;
+        }
+
+        int bit;
+        if((counter >> shift) < 8) {
+            bit = counter >> shift;
+        } else if(replicateY && ((counter - offsetYZ) < 8)) {
+            bit = counter - offsetYZ;
+        } else if(replicateZ && ((counter - offsetYZ * 2) < 8)) {
+            bit = counter - offsetYZ * 2;
+        } else {
+            return 0;
         }
 
         if(!refp) {
@@ -1199,27 +1178,40 @@ struct stella
     uint8_t process_TIA_to_pixel(int x)
     {
         using namespace Stella;
+
+        // Background
         uint8_t color = tia_write[COLUBK];
+
         if(x < hblank_pixels) {
             return color;
         }
+
         x -= hblank_pixels;
+
+        // Playfield
         int pf = get_playfield_bit(x);
+
+        // Players
+        int p0 = 0;
+        if(tia_write[GRP0] != 0) {
+            p0 = get_player_bit(P0counter, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
+        }
+        int p1 = 0;
+        if(tia_write[GRP1] != 0) {
+            p1 = get_player_bit(P1counter, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
+        }
+
+        // Priority
+        // XXX read and use priority register
         // XXX playfield and ball can be over players and missles if CTRLPF & 0x4, so need to handle that later
         if(pf) {
             color = tia_write[COLUPF];
         }
-        if(tia_write[GRP0] != 0) {
-            int p0 = get_player_bit(x, mobP0, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
-            if(p0) {
-                color = tia_write[COLUP0];
-            }
+        if(p0) {
+            color = tia_write[COLUP0];
         }
-        if(tia_write[GRP1] != 0) {
-            int p1 = get_player_bit(x, mobP1, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
-            if(p1) {
-                color = tia_write[COLUP1];
-            }
+        if(p1) {
+            color = tia_write[COLUP1];
         }
         // XXX process rest of registers
         return color;
@@ -1237,7 +1229,9 @@ bool advance_one_pixel(stella &hw)
     uint32_t line_within_frame = (pixel_clock_within_frame / pixels_per_line);
     uint32_t pixel_within_line = pixel_clock_within_frame % pixels_per_line;
 
-    bool hblank_started = (pixel_within_line == 0);
+    bool within_hblank = (pixel_within_line >= 0) && (pixel_within_line < 68);
+
+    hw.advance_counters(within_hblank);
 
     int color = hw.process_TIA_to_pixel(pixel_within_line);
 
@@ -1248,7 +1242,7 @@ bool advance_one_pixel(stella &hw)
         pixel_clock_within_frame = 0;
     }
 
-    return hblank_started;
+    return within_hblank;
 }
 
 void scanout_to_current_clock(const sysclock& clk, stella &hw)
