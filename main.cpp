@@ -79,6 +79,7 @@ namespace Stella
         VSYNC = 0x0000,
 
         VSYNC_SET = 0x02,
+        VBLANK_ENABLED = 0x02,
 
         CTRLPF_REFLECT_PLAYFIELD = 0x01,
         CTRLPF_SCORE_MODE = 0x02,
@@ -132,14 +133,14 @@ namespace Stella
 
     static constexpr uint32_t vsync_lines = 3;
     static constexpr uint32_t vblank_lines = 37;
-    static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
+    // static constexpr uint32_t visible_line_start = (vsync_lines + vblank_lines);
     static constexpr uint32_t visible_lines = 192;
     static constexpr uint32_t overscan_lines = 30;
     static constexpr uint32_t lines_per_frame = (vsync_lines + vblank_lines + visible_lines + overscan_lines);
     static constexpr uint32_t hblank_pixels = 68;
     static constexpr uint32_t visible_pixels = 160;
-    static constexpr uint32_t pixels_per_line = (hblank_pixels + visible_pixels);
-    static constexpr uint32_t clocks_per_frame = lines_per_frame * pixels_per_line;
+    static constexpr uint32_t clocks_per_line = (hblank_pixels + visible_pixels);
+    // static constexpr uint32_t clocks_per_frame = lines_per_frame * clocks_per_line;
 
     int get_signed_move(uint8_t HM)
     {
@@ -702,7 +703,7 @@ uint8_t screen[228 * 262];
 void set_colu(int x, int y, uint8_t colu)
 {
     using namespace Stella;
-    screen[x + y * pixels_per_line] = colu;
+    screen[x + y * clocks_per_line] = colu;
 }
 
 #if 0
@@ -715,10 +716,10 @@ void write_screen()
 
     sprintf(filename, "image%05d.ppm", frame_number);
     FILE *screenfile = fopen(filename, "wb");
-    fprintf(screenfile, "P6 %d %d 255\n", pixels_per_line * 2, lines_per_frame);
+    fprintf(screenfile, "P6 %d %d 255\n", clocks_per_line * 2, lines_per_frame);
     for(int y = 0; y < lines_per_frame; y++) {
-        for(int x = 0; x < pixels_per_line; x++) {
-            uint8_t colu = screen[x + y * pixels_per_line];
+        for(int x = 0; x < clocks_per_line; x++) {
+            uint8_t colu = screen[x + y * clocks_per_line];
             uint8_t *rgb = colu_to_rgb[colu];
             fwrite(rgb, 3, 1, screenfile);
             fwrite(rgb, 3, 1, screenfile);
@@ -735,17 +736,8 @@ void write_screen()
 
 typedef uint64_t clk_t;
 
-uint32_t pixel_clock_within_frame = 0;
-
-uint8_t current_horizontal_clock(int if_in_hblank)
-{
-    using namespace Stella;
-    // Could use a value incremented and reset from advance_one_pixel
-
-    uint32_t pixel_within_line = pixel_clock_within_frame % pixels_per_line;
-
-    return (pixel_within_line < 68) ? if_in_hblank : (pixel_within_line - 68);
-}
+uint32_t horizontal_clock = 0;
+uint32_t scanline = 0;
 
 struct sysclock // When I called this "clock" XCode errored out because I shadowed MacOSX's "clock"
 {
@@ -828,6 +820,7 @@ struct stella
     uint8_t tia_write[64];
     uint8_t tia_read[64];
     bool wait_for_hsync = false;
+    bool vsync_enabled = false;
 
     stella(const std::vector<uint8_t>& ROM, sysclock& clock) :
         ROM(std::move(ROM)),
@@ -974,9 +967,14 @@ struct stella
             if(addr == VSYNC) {
                 if(debug & DEBUG_TIA) { printf("wrote %02X to VSYNC\n", data); }
                 if(data & VSYNC_SET) {
-                    pixel_clock_within_frame = 0;
-                    // write_screen();
-                    PlatformInterface::Frame(screen, 1.0f);
+                    vsync_enabled = true;
+                } else {
+                    if(vsync_enabled) {
+                        scanline = 0;
+                        // write_screen();
+                        PlatformInterface::Frame(screen, 1.0f);
+                        vsync_enabled = false;
+                    }
                 }
             } else if(addr == CXCLR) {
                 printf("wrote %02X to CXCLR\n", data);
@@ -1179,6 +1177,12 @@ struct stella
     {
         using namespace Stella;
 
+        bool within_vblank = tia_write[VBLANK] & VBLANK_ENABLED;
+
+        if(within_vblank) {
+            return 0x00;
+        }
+
         // Background
         uint8_t color = tia_write[COLUBK];
 
@@ -1226,20 +1230,22 @@ clk_t last_pixel_clocked;
 bool advance_one_pixel(stella &hw)
 {
     using namespace Stella;
-    uint32_t line_within_frame = (pixel_clock_within_frame / pixels_per_line);
-    uint32_t pixel_within_line = pixel_clock_within_frame % pixels_per_line;
 
-    bool within_hblank = (pixel_within_line >= 0) && (pixel_within_line < 68);
+    bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < 68);
 
     hw.advance_counters(within_hblank);
 
-    int color = hw.process_TIA_to_pixel(pixel_within_line);
+    int color = hw.process_TIA_to_pixel(horizontal_clock);
 
-    set_colu(pixel_within_line, line_within_frame, color);
+    set_colu(horizontal_clock, scanline, color);
 
-    pixel_clock_within_frame++;
-    if(pixel_clock_within_frame >= clocks_per_frame) {
-        pixel_clock_within_frame = 0;
+    horizontal_clock++;
+    if(horizontal_clock >= clocks_per_line) {
+        horizontal_clock = 0;
+        scanline++;
+        if(scanline >= lines_per_frame) {
+            scanline = 0;
+        }
     }
 
     return within_hblank;
