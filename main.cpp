@@ -736,9 +736,6 @@ void write_screen()
 
 typedef uint64_t clk_t;
 
-uint32_t horizontal_clock = 0;
-uint32_t scanline = 0;
-
 struct sysclock // When I called this "clock" XCode errored out because I shadowed MacOSX's "clock"
 {
     clk_t clock = 0;
@@ -767,6 +764,8 @@ struct stella
     std::vector<uint8_t> ROM;
     uint16_t ROM_address_mask;
     sysclock& clk;
+    uint32_t horizontal_clock = 0;
+    uint32_t scanline = 0;
 
     uint8_t P0counter = 0;
     uint8_t P1counter = 0;
@@ -777,8 +776,7 @@ struct stella
     uint32_t interval_timer = 0;
     uint32_t interval_timer_value = 0;
     uint32_t interval_timer_prescaler = 1;
-    clk_t previous_interval_timer = 0;
-    bool timer_underflow = false;
+    bool timer_interrupt = false;
 
     void set_interval_timer(int prescaler, uint8_t value)
     {
@@ -789,32 +787,30 @@ struct stella
         } else {
             interval_timer = (value - 1) * prescaler;
         }
+        timer_interrupt = false;
     }
 
     void advance_counters(bool in_hblank)
     {
+        using namespace Stella;
         if(!in_hblank) {
-            P0counter = (P0counter + 1) % 160;
-            P1counter = (P1counter + 1) % 160;
-            M0counter = (M0counter + 1) % 160;
-            M1counter = (M1counter + 1) % 160;
-            BLcounter = (BLcounter + 1) % 160;
+            P0counter = (P0counter + 1) % visible_pixels;
+            P1counter = (P1counter + 1) % visible_pixels;
+            M0counter = (M0counter + 1) % visible_pixels;
+            M1counter = (M1counter + 1) % visible_pixels;
+            BLcounter = (BLcounter + 1) % visible_pixels;
         }
     }
 
-    void advance_interval_timer(sysclock& clk)
+    void advance_interval_timer()
     {
-        // could redo without loop
-        for(clk_t c = previous_interval_timer; c < clk; c++) {
-            if(interval_timer == 0) {
-                timer_underflow = true;
-                interval_timer = 0xFF * interval_timer_prescaler;
-            } else {
-                interval_timer--;
-            }
+        if(interval_timer == 0) {
+            timer_interrupt = true;
+            interval_timer = 0xFF * interval_timer_prescaler;
+        } else {
+            interval_timer--;
         }
         if(debug & DEBUG_TIMER) { printf("timer now %d\n", interval_timer); }
-        previous_interval_timer = clk;
     }
 
     uint8_t tia_write[64];
@@ -925,7 +921,12 @@ struct stella
                 return PlatformInterface::ReadConsoleSwitches();
             } else if(addr == INTIM) {
                 uint8_t data = interval_timer / interval_timer_prescaler;
+                timer_interrupt = false;
                 if(debug & DEBUG_TIMER) { printf("read interval timer, %2X\n", data); }
+                return data;
+            } else if(addr == INSTAT) {
+                uint8_t data = timer_interrupt ? 0x80 : 0;
+                /* if(debug & DEBUG_TIMER) */ { printf("read interval status, %2X\n", data); }
                 return data;
             } else if(addr == SWCHA) {
                 uint8_t swcha, player0button, player1button;
@@ -952,14 +953,11 @@ struct stella
             if(addr == TIM1T) {
                 set_interval_timer(1, data);
             } else if(addr == TIM8T) {
-                interval_timer = interval_timer_value = data * 8;
-                interval_timer_prescaler = 8;
+                set_interval_timer(8, data);
             } else if(addr == TIM64T) {
-                interval_timer = interval_timer_value = data * 64;
-                interval_timer_prescaler = 64;
+                set_interval_timer(64, data);
             } else if(addr == T1024T) {
-                interval_timer = interval_timer_value = data * 1024;
-                interval_timer_prescaler = 1024;
+                set_interval_timer(1024, data);
             }
             // XXX TODO
         } else if(isTIA(addr)) {
@@ -980,19 +978,19 @@ struct stella
                 printf("wrote %02X to CXCLR\n", data);
                 // reset collision latches
             } else if(addr == HMCLR) {
-                // Reset all 5 HM registers to 0
+                // Reset all 5 motion registers to 0
                 tia_write[HMBL] = 0;
                 tia_write[HMM1] = 0;
                 tia_write[HMM0] = 0;
                 tia_write[HMP1] = 0;
                 tia_write[HMP0] = 0;
             } else if(addr == HMOVE) {
-                // Apply the HM variables, move players, missles, and ball
-                P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + 160) % 160;
-                P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + 160) % 160;
-                M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + 160) % 160;
-                M1counter = (M1counter + get_signed_move(tia_write[HMM1]) + 160) % 160;
-                BLcounter = (BLcounter + get_signed_move(tia_write[HMBL]) + 160) % 160;
+                // Apply the motion registers to players, missles, and ball
+                P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + visible_pixels) % visible_pixels;
+                P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + visible_pixels) % visible_pixels;
+                M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + visible_pixels) % visible_pixels;
+                M1counter = (M1counter + get_signed_move(tia_write[HMM1]) + visible_pixels) % visible_pixels;
+                BLcounter = (BLcounter + get_signed_move(tia_write[HMBL]) + visible_pixels) % visible_pixels;
             } else if(addr == RESMP1) {
                 // XXX handle hid/lock bit
                 M0counter = P0counter;
@@ -1075,20 +1073,20 @@ struct stella
             } else if(addr == NUSIZ1) {
                 tia_write[NUSIZ1] = data;
             } else if(addr == RSYNC) {
-                // printf("write %d to RSYNC\n", data); 
+                /* ignored, resets hsync for testing */
             } else if(addr == WSYNC) {
                 // printf("write %d to WSYNC\n", data); 
                 wait_for_hsync = true;
             } else if(addr == VBLANK) {
                 // printf("write %d to VBLANK\n", data); 
             } else if(addr == 0x2D) {
-                // ignore?
+                // ignore
             } else if(addr == 0x2E) {
-                // ignore?
+                // ignore
             } else if(addr == 0x2F) {
-                // ignore?
+                // ignore
             } else if((addr >= 0x30) && (addr <= 0x3F)) {
-                // ignore?
+                // ignore
             }
         } else {
             printf("unhandled write of %02X to %04X\n", data, addr);
@@ -1169,41 +1167,47 @@ struct stella
             bit = 7 - bit;
         }
 
-        // printf("bit = %d\n", bit);
         return (grp >> bit) & 1;
     }
 
-    uint8_t process_TIA_to_pixel(int x)
+    uint8_t get_pixel()
     {
         using namespace Stella;
 
         bool within_vblank = tia_write[VBLANK] & VBLANK_ENABLED;
 
         if(within_vblank) {
-            return 0x00;
+            return 0x00; // BLACK
         }
 
         // Background
         uint8_t color = tia_write[COLUBK];
 
-        if(x < hblank_pixels) {
+        if(horizontal_clock < hblank_pixels) {
             return color;
         }
 
-        x -= hblank_pixels;
+        int x = horizontal_clock - hblank_pixels;
 
         // Playfield
+
         int pf = get_playfield_bit(x);
 
         // Players
+
         int p0 = 0;
         if(tia_write[GRP0] != 0) {
             p0 = get_player_bit(P0counter, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
         }
+
         int p1 = 0;
         if(tia_write[GRP1] != 0) {
             p1 = get_player_bit(P1counter, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
         }
+
+        // Missiles
+
+        // Balls
 
         // Priority
         // XXX read and use priority register
@@ -1221,56 +1225,57 @@ struct stella
         return color;
     }
 
-};
+    clk_t last_pixel_clocked;
 
-clk_t last_pixel_clocked;
+    // Must be called once and only once for every clock value
+    // I.e. clk must be incrementing on each call
+    bool advance_one_clock()
+    {
+        using namespace Stella;
 
-// Must be called once and only once for every clock value
-// I.e. clk must be incrementing on each call
-bool advance_one_pixel(stella &hw)
-{
-    using namespace Stella;
+        bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < hblank_pixels);
 
-    bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < 68);
+        int color = get_pixel();
 
-    hw.advance_counters(within_hblank);
+        set_colu(horizontal_clock, scanline, color);
 
-    int color = hw.process_TIA_to_pixel(horizontal_clock);
-
-    set_colu(horizontal_clock, scanline, color);
-
-    horizontal_clock++;
-    if(horizontal_clock >= clocks_per_line) {
-        horizontal_clock = 0;
-        scanline++;
-        if(scanline >= lines_per_frame) {
-            scanline = 0;
+        horizontal_clock++;
+        if(horizontal_clock >= clocks_per_line) {
+            horizontal_clock = 0;
+            scanline++;
+            if(scanline >= lines_per_frame) {
+                scanline = 0;
+            }
         }
+
+        advance_counters(within_hblank);
+        advance_interval_timer();
+
+        return within_hblank;
     }
 
-    return within_hblank;
-}
-
-void scanout_to_current_clock(const sysclock& clk, stella &hw)
-{
-    using namespace Stella;
-    for(clk_t c = last_pixel_clocked; c < clk; c++) {
-        advance_one_pixel(hw);
+    void advance_to_clock(const sysclock& clk)
+    {
+        using namespace Stella;
+        for(clk_t c = last_pixel_clocked; c < clk; c++) {
+            advance_one_clock();
+        }
+        last_pixel_clocked = clk;
     }
-    last_pixel_clocked = clk;
-}
 
-clk_t scanout_to_hsync(const sysclock& clk, stella &hw)
-{
-    using namespace Stella;
-    bool hsync_started;
-    do {
-        hsync_started = advance_one_pixel(hw);
-    } while(!hsync_started);
-    auto clocks = last_pixel_clocked - clk;
-    last_pixel_clocked = clk;
-    return clocks;
-}
+    clk_t advance_to_hsync(const sysclock& clk)
+    {
+        using namespace Stella;
+        bool hsync_started;
+        do {
+            hsync_started = advance_one_clock();
+        } while(!hsync_started);
+        auto clocks = last_pixel_clocked - clk;
+        last_pixel_clocked = clk;
+        wait_for_hsync = false;
+        return clocks;
+    }
+};
 
 std::string read_bus_and_disassemble(stella &hw, int pc)
 {
@@ -1312,12 +1317,10 @@ int main(int argc, char **argv)
         // printf("%s\n", dis.c_str());
         cpu.cycle();
         if(hw.wait_for_hsync) {
-            auto cycles = scanout_to_hsync(clk, hw);
+            auto cycles = hw.advance_to_hsync(clk);
             clk.add_pixel_cycles(cycles);
-            hw.wait_for_hsync = false;
         } else {
-            scanout_to_current_clock(clk, hw);
+            hw.advance_to_clock(clk);
         }
-        hw.advance_interval_timer(clk);
     }
 }
