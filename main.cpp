@@ -87,6 +87,8 @@ namespace Stella
         CTRLPF_SCORE_MODE = 0x02,
         CTRLPF_PLAYFIELD_ABOVE = 0x04,
 
+        ENABL_ENABLED = 0x02,
+
        // TIA read
         CXM0P = 0x00,
         CXM1P = 0x01,
@@ -1201,6 +1203,14 @@ struct stella
         }
     }
 
+    int get_ball_bit(uint8_t counter, uint8_t ctrlpf)
+    {
+        using namespace Stella;
+
+        int shift = (tia_write[CTRLPF] >> 4) & 0x3;
+        return (counter >> shift) == 0;
+    }
+
     uint8_t do_pixel_work()
     {
         using namespace Stella;
@@ -1244,6 +1254,9 @@ struct stella
         // Ball
 
         int bl = 0;
+        if(tia_write[ENABL] & ENABL_ENABLED) {
+            bl = get_ball_bit(BLcounter, tia_write[CTRLPF]);
+        }
 
         // XXX process rest of registers
 
@@ -1258,6 +1271,9 @@ struct stella
         }
         if(p1) {
             color = tia_write[COLUP1];
+        }
+        if(bl) {
+            color = tia_write[COLUPF];
         }
 
         // Collision
