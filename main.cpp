@@ -781,7 +781,7 @@ struct stella
     void set_interval_timer(int prescaler, uint8_t value)
     {
         interval_timer_prescaler = prescaler;
-        interval_timer_subcounter = prescaler - 1;
+        interval_timer_counter = prescaler - 1;
         if(value == 0) {
             interval_timer = 0xFF;
         } else {
@@ -1128,7 +1128,9 @@ struct stella
     int get_playfield_bit(int x)
     {
         using namespace Stella;
+
         int playfield_bit_number = x / 4;
+
         if(playfield_bit_number >= 20) {
             if(tia_write[CTRLPF] & CTRLPF_REFLECT_PLAYFIELD) {
                 playfield_bit_number = 39 - playfield_bit_number;
@@ -1136,6 +1138,7 @@ struct stella
                 playfield_bit_number = playfield_bit_number - 20;
             }
         }
+
         if(playfield_bit_number < 4) {
             return (tia_write[PF0] >> (4 + playfield_bit_number)) & 0x01;
         }
