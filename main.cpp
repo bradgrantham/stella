@@ -89,7 +89,7 @@ namespace Stella
 
         ENABL_ENABLED = 0x02,
 
-       // TIA read
+        // TIA read
         CXM0P = 0x00,
         CXM1P = 0x01,
         CXP0FB = 0x02,
@@ -537,19 +537,11 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
     previous_event_time = std::chrono::system_clock::now();
 }
 
-enum {
-    SWITCH_TV_TYPE,
-    SWITCH_P0_DIFFICULTY,
-    SWITCH_P1_DIFFICULTY,
-    SWITCH_GAME_TYPE,
-    SWITCH_RESET,
-};
-
 static void HandleEvents(void)
 {
     using namespace Stella;
     static bool switch_tv_type = true; // true = color
-    static bool switch_p0_difficulty = false; // true = color
+    static bool switch_p0_difficulty = false;
     static bool switch_p1_difficulty = false;
     static bool shift_pressed = false;
     SDL_Event event;
@@ -987,7 +979,7 @@ struct stella
                     vsync_enabled = true;
                 } else {
                     if(vsync_enabled) {
-                        // printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
+                        printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
                         scanline = 0;
                         // write_screen();
                         PlatformInterface::Frame(screen, 1.0f);
@@ -1066,20 +1058,31 @@ struct stella
             } else if(reg == AUDC0) {
                 // audio control - skip
             } else if(reg == RESBL) {
-                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
             } else if(reg == RESM1) {
-                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
             } else if(reg == RESM0) { 
-                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : 0;
+                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
             } else if(reg == RESP1) {
-                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : 0;
+                if(horizontal_clock < hblank_pixels) {
+                    printf("RESP1 during hblank\n");
+                }
+                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 6);
             } else if(reg == RESP0) {
-                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : 0;
+                if(horizontal_clock < hblank_pixels) {
+                    printf("RESP0 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
+                } else {
+                    printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels - 6);
+                }
+                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 6);
             } else if(reg == PF2) {
+                printf("wrote PF2 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF2] = data;
             } else if(reg == PF1) {
+                printf("wrote PF1 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF1] = data;
             } else if(reg == PF0) {
+                printf("wrote PF0 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF0] = data;
             } else if(reg == REFP1) {
                 tia_write[REFP1] = data;
@@ -1203,6 +1206,55 @@ struct stella
         }
     }
 
+    int get_missile_bit(uint8_t counter, uint8_t nusiz)
+    {
+        using namespace Stella;
+        
+        bool replicateY = false;
+        bool replicateZ = false;
+        int offsetYZ = 16;
+        bool shift = (nusiz >> 4) & 0x03;
+
+        switch(nusiz & 0x7) {
+            case 0: /* X......... */
+                break;
+            case 1: /* X.Y....... */
+                replicateY = true;
+                break;
+            case 2: /* X...Y..... */
+                replicateY = true;
+                offsetYZ = 32;
+                break;
+            case 3: /* X.Y.Z..... */
+                replicateY = true;
+                replicateZ = true;
+                break;
+            case 4: /* X.......Y. */
+                replicateY = true;
+                offsetYZ = 64;
+                break;
+            case 5: /* ?? */
+                break;
+            case 6: /* X...Y...Z. */
+                replicateY = true;
+                replicateZ = true;
+                offsetYZ = 32;
+                break;
+            case 7: /* ?? */
+                break;
+        }
+
+        if((counter >> shift) == 0) {
+            return 1;
+        } else if(replicateY && ((counter - offsetYZ) == 0)) {
+            return 1;
+        } else if(replicateZ && ((counter - offsetYZ * 2) == 0)) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+
     int get_ball_bit(uint8_t counter, uint8_t ctrlpf)
     {
         using namespace Stella;
@@ -1232,7 +1284,11 @@ struct stella
 
         // Playfield
 
-        int pf = get_playfield_bit(x);
+        int pf = 0;
+        // if(x > 1) {
+            // pf = get_playfield_bit(x - 2);
+        // }
+        pf = get_playfield_bit(x);
 
         // Players
 
@@ -1249,7 +1305,14 @@ struct stella
         // Missiles
 
         int m0 = 0;
+        if(tia_write[ENAM0] & ENABL_ENABLED) {
+            m0 = get_missile_bit(M0counter, tia_write[NUSIZ0]);
+        }
+
         int m1 = 0;
+        if(tia_write[ENAM1] & ENABL_ENABLED) {
+            m1 = get_missile_bit(M1counter, tia_write[NUSIZ1]);
+        }
 
         // Ball
 
@@ -1348,12 +1411,12 @@ struct stella
     clk_t advance_to_hsync(const sysclock& clk)
     {
         using namespace Stella;
-        bool hsync_started;
-        hsync_started = advance_one_clock(mark_cpu_wait);
+        bool in_hsync;
+        in_hsync = advance_one_clock(mark_cpu_wait);
 
-        while(!hsync_started) {
-            hsync_started = advance_one_clock(false);
-        } while(!hsync_started);
+        while(!in_hsync) {
+            in_hsync = advance_one_clock(false);
+        };
 
         auto clocks = last_pixel_clocked - clk;
         last_pixel_clocked = clk;
