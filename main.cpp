@@ -445,7 +445,7 @@ uint8_t SWCHA_value =
     Stella::SWCHA_JOYSTICK1_UP | Stella::SWCHA_JOYSTICK1_DOWN | Stella::SWCHA_JOYSTICK1_LEFT | Stella::SWCHA_JOYSTICK1_RIGHT;
 uint8_t player0button = 0x80; // as shows up in INPT4, 0x00 if pressed, 0x80 if not pressed.
 uint8_t player1button = 0x80; // as shows up in INPT5, 0x00 if pressed, 0x80 if not pressed.
-std::tuple<uint8_t, bool, bool> ReadJoysticks()
+std::tuple<uint8_t, uint8_t, uint8_t> ReadJoysticks()
 {
     return std::make_tuple(SWCHA_value, player0button, player1button);
 }
@@ -979,7 +979,7 @@ struct stella
                     vsync_enabled = true;
                 } else {
                     if(vsync_enabled) {
-                        printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
+                        // printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
                         scanline = 0;
                         // write_screen();
                         PlatformInterface::Frame(screen, 1.0f);
@@ -1005,6 +1005,9 @@ struct stella
                 tia_write[HMP0] = 0;
             } else if(reg == HMOVE) {
                 // Apply the motion registers to players, missles, and ball
+                bool within_hblank = horizontal_clock < hblank_pixels;
+                printf("move P0 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP0]));
+                printf("move P1 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP1]));
                 P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + visible_pixels) % visible_pixels;
                 P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + visible_pixels) % visible_pixels;
                 M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + visible_pixels) % visible_pixels;
@@ -1058,31 +1061,36 @@ struct stella
             } else if(reg == AUDC0) {
                 // audio control - skip
             } else if(reg == RESBL) {
-                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
+                // PROBABLY WRONG
+                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 19);
             } else if(reg == RESM1) {
-                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
+                // PROBABLY WRONG
+                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 19);
             } else if(reg == RESM0) { 
-                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 6);
+                // PROBABLY WRONG
+                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 2) : (visible_pixels - 19);
             } else if(reg == RESP1) {
                 if(horizontal_clock < hblank_pixels) {
-                    printf("RESP1 during hblank\n");
+                    printf("RESP1 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
+                } else {
+                    printf("RESP1 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
                 }
-                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 6);
+                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 23);
             } else if(reg == RESP0) {
                 if(horizontal_clock < hblank_pixels) {
                     printf("RESP0 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
                 } else {
-                    printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels - 6);
+                    printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
                 }
-                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 6);
+                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 3) : (visible_pixels - 23);
             } else if(reg == PF2) {
-                printf("wrote PF2 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
+                // printf("line %3d, wrote PF2 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF2] = data;
             } else if(reg == PF1) {
-                printf("wrote PF1 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
+                // printf("line %3d, wrote PF1 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF1] = data;
             } else if(reg == PF0) {
-                printf("wrote PF0 at %d -> %d\n", horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
+                // printf("line %3d, wrote PF0 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF0] = data;
             } else if(reg == REFP1) {
                 tia_write[REFP1] = data;
@@ -1109,7 +1117,7 @@ struct stella
                 wait_for_hsync = true;
             } else if(reg == VBLANK) {
                 tia_write[VBLANK] = data;
-                // printf("write %d to VBLANK\n", data); 
+                printf("write %d to VBLANK\n", data); 
             } else if(reg == 0x2D) {
                 // ignore
             } else if(reg == 0x2E) {
@@ -1125,9 +1133,29 @@ struct stella
         }
     }
 
-    int get_playfield_bit(int x)
+    int get_playfield_bit(int horizontal_clock)
     {
         using namespace Stella;
+
+        static uint8_t cachedPF0 = 0;
+        static uint8_t cachedPF1 = 0;
+        static uint8_t cachedPF2 = 0;
+
+        if((horizontal_clock == hblank_pixels - 1) || (horizontal_clock == hblank_pixels + visible_pixels / 2)) {
+            cachedPF0 = tia_write[PF0];
+        }
+        if((horizontal_clock == hblank_pixels - 1 + 16) || (horizontal_clock == hblank_pixels + visible_pixels / 2 + 16)) {
+            cachedPF1 = tia_write[PF1];
+        }
+        if((horizontal_clock == hblank_pixels - 1 + 32) || (horizontal_clock == hblank_pixels + visible_pixels / 2 + 32)) {
+            cachedPF2 = tia_write[PF2];
+        }
+
+        if(horizontal_clock < hblank_pixels) {
+            return 0;
+        }
+
+        int x = horizontal_clock - hblank_pixels;
 
         int playfield_bit_number = x / 4;
 
@@ -1140,12 +1168,12 @@ struct stella
         }
 
         if(playfield_bit_number < 4) {
-            return (tia_write[PF0] >> (4 + playfield_bit_number)) & 0x01;
+            return (cachedPF0 >> (4 + playfield_bit_number)) & 0x01;
         }
         if(playfield_bit_number < 12) {
-            return (tia_write[PF1] >> (11 - playfield_bit_number)) & 0x01;
+            return (cachedPF1 >> (11 - playfield_bit_number)) & 0x01;
         }
-        return (tia_write[PF2] >> (playfield_bit_number - 12)) & 0x01;
+        return (cachedPF2 >> (playfield_bit_number - 12)) & 0x01;
     }
     
     int get_player_bit(uint8_t counter, uint8_t grp, uint8_t nusiz, uint8_t refp)
@@ -1278,20 +1306,15 @@ struct stella
         // Background
         uint8_t color = tia_write[COLUBK];
 
+        // Playfield
+
+        int pf = 0;
+        pf = get_playfield_bit(horizontal_clock); // Does caching
+
         bool within_hblank = horizontal_clock < hblank_pixels;
         if(within_hblank) {
             return 0x00; // color;
         }
-
-        int x = horizontal_clock - hblank_pixels;
-
-        // Playfield
-
-        int pf = 0;
-        // if(x > 1) {
-            // pf = get_playfield_bit(x - 2);
-        // }
-        pf = get_playfield_bit(x);
 
         // Players
 
@@ -1336,6 +1359,12 @@ struct stella
             color = tia_write[COLUP0];
         }
         if(p1) {
+            color = tia_write[COLUP1];
+        }
+        if(m0) {
+            color = tia_write[COLUP0];
+        }
+        if(m1) {
             color = tia_write[COLUP1];
         }
         if(bl) {
@@ -1415,10 +1444,11 @@ struct stella
     {
         using namespace Stella;
         bool in_hsync;
-        in_hsync = advance_one_clock(mark_cpu_wait);
+        bool start_of_hblank = horizontal_clock == 0;
 
-        while(!in_hsync) {
-            in_hsync = advance_one_clock(false);
+        while(!start_of_hblank) {
+            advance_one_clock(false);
+            start_of_hblank = horizontal_clock == 0;
         };
 
         auto clocks = last_pixel_clocked - clk;
@@ -1472,6 +1502,7 @@ int main(int argc, char **argv)
         std::string dis = read_bus_and_disassemble(hw, cpu.pc);
         // printf("%s\n", dis.c_str());
         cpu.cycle();
+        // printf("clk = %llu\n", (clk_t)clk);
         if(hw.wait_for_hsync) {
             auto cycles = hw.advance_to_hsync(clk);
             clk.add_pixel_cycles(cycles);
