@@ -132,13 +132,15 @@ void advance_audio_clock()
     using namespace Stella;
     clk_t current_audio_processing_clock = previous_audio_processing_clock + 1;
 
-    if(next_audio_clock == current_audio_processing_clock) {
+    // fprintf(stderr, "%llu, %llu, %llu\n", current_audio_processing_clock, next_audio_clock, next_sample_clock);
+
+    if(next_audio_clock < current_audio_processing_clock) {
         audio_levels[0] = advance_channel_clock(tia_write[AUDV0], tia_write[AUDF0], tia_write[AUDC0], audio_counter[0], audio_bitstream[0]);
         audio_levels[1] = advance_channel_clock(tia_write[AUDV1], tia_write[AUDF1], tia_write[AUDC1], audio_counter[1], audio_bitstream[1]);
         next_audio_clock = current_audio_processing_clock + video_clocks_per_audio_clock;
     }
 
-    if(next_sample_clock == current_audio_processing_clock) {
+    if(next_sample_clock < current_audio_processing_clock) {
         emit_samples(audio_levels[0], audio_levels[1]);
         next_sample_index ++;
         next_sample_clock = next_sample_index * clock_rate / sampling_rate;
@@ -150,11 +152,13 @@ void advance_audio_clock()
 
 int main(int argc, const char **argv)
 {
-    unsigned char regname[512];
     clk_t current_clock = 0;
+
+    unsigned char regname[512];
     clk_t next_write_clock;
     uint32_t next_write_address;
     uint32_t next_write_value;
+
     while(scanf("%[^,],%llu,%d,%d ", regname, &next_write_clock, &next_write_address, &next_write_value) == 4) {
         while(current_clock < next_write_clock) {
             advance_audio_clock();
