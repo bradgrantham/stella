@@ -1,6 +1,7 @@
 #include <vector>
 #include <array>
 #include <chrono>
+#include <thread>
 #include <iostream>
 #include <cstdint>
 #include <cstdio>
@@ -326,7 +327,7 @@ void EnqueueStereoU8AudioSamples(uint8_t *buf, size_t sz)
         audio_needs_start = false;
         SDL_PauseAudioDevice(audio_device, 0);
         /* give a little data to avoid gaps and to avoid a pop */
-        std::array<uint8_t, 2048> lead_in;
+        std::array<uint8_t, 256> lead_in;
         size_t sampleCount = lead_in.size() / 2;
         for(int i = 0; i < sampleCount; i++) {
             lead_in[i * 2 + 0] = 128 + (buf[0] - 128) * i / sampleCount;
@@ -346,6 +347,7 @@ SDL_Renderer *renderer;
 SDL_Surface *surface;
 
 std::chrono::time_point<std::chrono::system_clock> previous_event_time;
+std::chrono::time_point<std::chrono::system_clock> previous_frame_time;
 
 void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
 {
@@ -401,6 +403,7 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
     SDL_PumpEvents();
 
     previous_event_time = std::chrono::system_clock::now();
+    previous_frame_time = std::chrono::system_clock::now();
 }
 
 static void HandleEvents(void)
@@ -522,7 +525,20 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
 {
     using namespace std::chrono_literals;
 
-    if (SDL_MUSTLOCK(surface)) SDL_LockSurface(surface);
+    std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
+    std::chrono::duration<float> elapsed;
+
+    elapsed = now - previous_frame_time;
+    // printf("elapsed.count() == %f\n", elapsed.count());
+    static constexpr long long minimum_frame_micros = 15000; // Hand-tuned...
+
+    while(elapsed < std::chrono::microseconds(minimum_frame_micros)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(minimum_frame_micros) - elapsed); // XXX either skip until .05 or do this sleep
+        elapsed = std::chrono::system_clock::now() - previous_frame_time;
+    }
+    if (SDL_MUSTLOCK(surface)) {
+        SDL_LockSurface(surface);
+    }
 
     uint8_t* framebuffer = reinterpret_cast<uint8_t*>(surface->pixels);
 
@@ -539,17 +555,11 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
         }
     }
 
-    if (SDL_MUSTLOCK(surface)) SDL_UnlockSurface(surface);
-
-    std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
-    std::chrono::duration<float> elapsed;
-    
-    elapsed = now - previous_event_time;
-    if(elapsed.count() > .05) {
-        HandleEvents();
-        previous_event_time = now;
+    if (SDL_MUSTLOCK(surface)) {
+        SDL_UnlockSurface(surface);
     }
 
+    // printf("Draw frame\n");
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
     if(!texture) {
         printf("could not create texture\n");
@@ -559,6 +569,15 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
     SDL_RenderCopy(renderer, texture, NULL, NULL);
     SDL_RenderPresent(renderer);
     SDL_DestroyTexture(texture);
+    previous_frame_time = std::chrono::system_clock::now();
+
+    now = std::chrono::system_clock::now();
+    elapsed = now - previous_event_time;
+    if(elapsed.count() > .05) {
+        HandleEvents();
+        previous_event_time = now;
+    }
+
 }
 
 };
@@ -607,6 +626,143 @@ struct sysclock // When I called this "clock" XCode errored out because I shadow
     }
 };
 
+struct TIAChannel
+{
+    int sound_bit = 0;
+    uint16_t poly4 = 0xff;
+    uint16_t poly5 = 0xff;
+    uint16_t poly9 = 0xff;
+    int tone31Counter = 31;
+    int tone6Counter = 3;
+    int tone6 = 1;
+    int tone2 = 1;
+
+    uint8_t advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC, int& counter);
+    uint8_t advance_audio_clock(uint8_t AUDC);
+
+    int currentPoly4()
+    {
+        return poly4 & 0x1;
+    }
+
+    int nextPoly4()
+    {
+        int oldbit = poly4 & 0x1;
+        int newbit = ((poly4 >> 1) ^ oldbit) & 0x1;
+        poly4 = (poly4 >> 1) | (newbit << 3);
+        return oldbit;
+    }
+
+    int nextPoly5()
+    {
+        int oldbit = poly5 & 0x1;
+        int newbit = ((poly5 >> 2) ^ oldbit) & 0x1;
+        poly5 = (poly5 >> 1) | (newbit << 4);
+        return oldbit;
+    }
+
+    int nextPoly9()
+    {
+        int oldbit = poly9 & 0x1;
+        int newbit = ((poly9 >> 4) ^ oldbit) & 0x1;
+        poly9 = (poly9 >> 1) | (newbit << 8);
+        return oldbit;
+    }
+
+    int nextTone2()
+    {
+        int bit = tone2;
+        tone2 = tone2 ^ 0x1;
+        return bit;
+    }
+
+    int currentTone6()
+    {
+        return tone6;
+    }
+
+    int nextTone6()
+    {
+        if(tone6Counter > 0) {
+            tone6Counter--;
+        } else {
+            tone6Counter = 3;
+            tone6 ^= 0x1;
+        }
+        return tone6;
+    }
+
+    int currentTone31()
+    {
+        // change this in nextTone31
+        return (tone31Counter > 13) ? 1 : 0;
+    }
+
+    int nextTone31()
+    {
+        if(tone31Counter > 0) { 
+            tone31Counter--;
+        } else {
+            tone31Counter = 31;
+        }
+        return currentTone31();
+    }
+};
+
+uint8_t TIAChannel::advance_audio_clock(uint8_t AUDC)
+{
+    switch(AUDC & 0xF) {
+        case 0x0: case 0xb: default:
+            return 1;
+            break;
+        case 0x1:
+            return nextPoly4();
+            break;
+        case 0x2:
+            return (currentTone31() != nextTone31()) ? nextPoly4() : currentPoly4();
+            break;
+        case 0x3:
+            return (nextPoly5() == 1) ? nextPoly4() : currentPoly4();
+            break;
+        case 0x4: case 0x5:
+            return nextTone2();
+            break;
+        case 0x6: case 0xa:
+            return nextTone31();
+            break;
+        case 0x7: case 0x9:
+            return nextPoly5();
+            break;
+        case 0x8:
+            return nextPoly9();
+            break;
+        case 0xc: case 0xd:
+            return nextTone6();
+            break;
+        case 0xe:
+            return (currentTone31() != nextTone31()) ? nextTone6() : currentTone6();
+            break;
+        case 0xf:
+            return (nextPoly5() == 1) ? nextTone6() : currentTone6();
+            break;
+    }
+}
+
+uint8_t TIAChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC, int& counter)
+{
+    using namespace Stella;
+
+    // Does writing new AUDF reset the counter?  Or is it only used to reload the counter?
+    if(counter > 0) {
+        counter--;
+    } else {
+        sound_bit = advance_audio_clock(AUDC);
+        counter = AUDF;
+    }
+
+    return 128 + (sound_bit ? -128 : 127 ) * AUDV / 15;
+}
+
 struct stella 
 {
     enum {
@@ -637,6 +793,20 @@ struct stella
     bool timer_interrupt = false;
 
     uint8_t screen[228 * 262];
+
+    int audio_counter[2] = {0, 0};
+    uint64_t next_sample_index = 0;
+    uint8_t audio_levels[2] = {128, 128};
+    clk_t next_sample_clock = 0;
+    uint32_t sampling_rate = 44100;
+    clk_t previous_audio_processing_clock = 0;
+    clk_t next_audio_clock = 0;
+    clk_t clock_rate = 3579540;
+    static constexpr clk_t video_clocks_per_audio_clock = 114;
+    TIAChannel audio_channels[2];
+    uint32_t stereoU8SampleRate;
+    size_t preferredAudioBufferSizeBytes;
+    std::vector<unsigned char> audio_buffer;
 
     void set_colu(int x, int y, uint8_t colu)
     {
@@ -678,6 +848,33 @@ struct stella
         }
     }
 
+    void advance_sound_clock()
+    {
+        using namespace Stella;
+        clk_t current_audio_processing_clock = previous_audio_processing_clock + 1;
+
+        // fprintf(stderr, "%llu, %llu, %llu\n", current_audio_processing_clock, next_audio_clock, next_sample_clock);
+
+        if(next_audio_clock < current_audio_processing_clock) {
+            audio_levels[0] = audio_channels[0].advance_clock(tia_write[AUDV0], tia_write[AUDF0], tia_write[AUDC0], audio_counter[0]);
+            audio_levels[1] = audio_channels[1].advance_clock(tia_write[AUDV1], tia_write[AUDF1], tia_write[AUDC1], audio_counter[1]);
+            next_audio_clock = current_audio_processing_clock + video_clocks_per_audio_clock;
+        }
+
+        if(next_sample_clock < current_audio_processing_clock) {
+            audio_buffer.push_back(audio_levels[0]);
+            audio_buffer.push_back(audio_levels[1]);
+            if(audio_buffer.size() == preferredAudioBufferSizeBytes) {
+                PlatformInterface::EnqueueStereoU8AudioSamples(audio_buffer.data(), audio_buffer.size());
+                audio_buffer.clear();
+            }
+            next_sample_index ++;
+            next_sample_clock = next_sample_index * clock_rate / sampling_rate;
+        }
+
+        previous_audio_processing_clock = current_audio_processing_clock;
+    }
+
     void advance_counters(bool in_hblank)
     {
         using namespace Stella;
@@ -710,6 +907,7 @@ struct stella
             abort();
         }
         memset(screen, 0, sizeof(screen));
+        PlatformInterface::Start(stereoU8SampleRate, preferredAudioBufferSizeBytes);
     }
 
     bool isPIA(uint16_t addr)
@@ -729,6 +927,7 @@ struct stella
         using namespace Stella;
         return (addr & address_mask) == RAM_select_value;
     }
+
     uint8_t read(uint16_t addr)
     {
         using namespace Stella;
@@ -873,9 +1072,9 @@ struct stella
             } else if(reg == HMOVE) {
                 // Apply the motion registers to players, missles, and ball
                 bool within_hblank = horizontal_clock < hblank_pixels;
-                printf("move P0 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP0]));
-                printf("move P1 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP1]));
-                printf("move BL %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMBL]));
+                // printf("move P0 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP0]));
+                // printf("move P1 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP1]));
+                // printf("move BL %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMBL]));
                 P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + visible_pixels) % visible_pixels;
                 P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + visible_pixels) % visible_pixels;
                 M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + visible_pixels) % visible_pixels;
@@ -935,23 +1134,23 @@ struct stella
                     tia_write[GRP0] = data;
                 }
             } else if(reg == AUDV1) {
-                printf("AUDV1,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDV1,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDV1] = data;
             } else if(reg == AUDV0) {
-                printf("AUDV0,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDV0,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDV0] = data;
             } else if(reg == AUDF1) {
-                printf("AUDF1,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDF1,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDF1] = data;
             } else if(reg == AUDF0) {
-                printf("AUDF0,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDF0,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDF0] = data;
             } else if(reg == AUDC1) {
-                printf("AUDC1,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDC1,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDC1] = data;
             } else if(reg == AUDC0) {
-                printf("AUDC0,%llu,%d,%d\n", (clk_t)clk, reg, data);
-                // audio control - skip
+                // printf("AUDC0,%llu,%d,%d\n", (clk_t)clk, reg, data);
+                tia_write[AUDC0] = data;
             } else if(reg == RESBL) {
                 // PROBABLY WRONG
                 if(horizontal_clock < hblank_pixels) {
@@ -968,16 +1167,16 @@ struct stella
                 M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 9) : (visible_pixels - 14);
             } else if(reg == RESP1) {
                 if(horizontal_clock < hblank_pixels) {
-                    printf("RESP1 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
+                    // printf("RESP1 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
                 } else {
-                    printf("RESP1 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
+                    // printf("RESP1 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
                 }
                 P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 6) : (visible_pixels - 17);
             } else if(reg == RESP0) {
                 if(horizontal_clock < hblank_pixels) {
-                    printf("RESP0 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
+                    // printf("RESP0 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
                 } else {
-                    printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
+                    // printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
                 }
                 P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 6) : (visible_pixels - 17);
             } else if(reg == PF2) {
@@ -1014,7 +1213,7 @@ struct stella
                 wait_for_hsync = true;
             } else if(reg == VBLANK) {
                 tia_write[VBLANK] = data;
-                printf("write %d to VBLANK\n", data); 
+                // printf("write %d to VBLANK\n", data); 
             } else if(reg == 0x2D) {
                 // ignore
             } else if(reg == 0x2E) {
@@ -1324,6 +1523,7 @@ struct stella
 
         advance_counters(within_hblank);
         advance_interval_timer();
+        advance_sound_clock();
 
         return within_hblank;
     }
@@ -1371,10 +1571,6 @@ std::string read_bus_and_disassemble(stella &hw, int pc)
 
 int main(int argc, char **argv)
 {
-    uint32_t stereoU8SampleRate;
-    size_t preferredAudioBufferSizeBytes;
-    PlatformInterface::Start(stereoU8SampleRate, preferredAudioBufferSizeBytes);
-
     if(argc < 2) {
         fprintf(stderr, "usage: %s cartridge-rom-file\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -1396,8 +1592,10 @@ int main(int argc, char **argv)
     CPU6502 cpu(clk, hw);
     cpu.reset();
     while(1) {
-        std::string dis = read_bus_and_disassemble(hw, cpu.pc);
-        // printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
+        if(false) {
+            std::string dis = read_bus_and_disassemble(hw, cpu.pc);
+            printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
+        }
         cpu.cycle();
         // printf("clk = %llu\n", (clk_t)clk);
         if(hw.wait_for_hsync) {
