@@ -66,9 +66,9 @@ namespace Stella
         CTRLPF_SCORE_MODE = 0x02,
         CTRLPF_PLAYFIELD_ABOVE = 0x04,
 
-        ENABL_ENABLED = 0x02,
+        ENABL_ENABLED = 0x01,
 
-        VDEL_ENABLED = 0x02,
+        VDEL_ENABLED = 0x01,
 
         // TIA read
         CXM0P = 0x00,
