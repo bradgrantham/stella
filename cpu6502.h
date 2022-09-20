@@ -96,7 +96,7 @@ struct CPU6502
 
     bool isset(uint8_t flag)
     {
-        return (p & flag) != 0;
+        return p & flag;
     }
 
     void set_flags(uint8_t flags, uint8_t v)
@@ -729,7 +729,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -752,7 +752,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -772,7 +772,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -790,7 +790,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -812,7 +812,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -834,7 +834,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
@@ -851,7 +851,7 @@ struct CPU6502
                     flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
                     flag_change(V, adc_overflow_d(bcd, m, carry));
                     set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
+                    a = bcd / 10 * 16 + bcd % 10 - (isset(C) ? 0xA0 : 0);
                 } else {
                     flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
                     flag_change(V, adc_overflow(a, m, carry));
