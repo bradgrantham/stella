@@ -24,7 +24,6 @@
 // 0280-0297 RIOT I/O, TIMER
 // F000-FFFF ROM
 
-
 namespace PlatformInterface
 {
 
@@ -626,7 +625,7 @@ struct sysclock // When I called this "clock" XCode errored out because I shadow
     }
 };
 
-struct TIAChannel
+struct TIAAudioChannel
 {
     int sound_bit = 0;
     uint16_t poly4 = 0xff;
@@ -709,7 +708,7 @@ struct TIAChannel
     }
 };
 
-uint8_t TIAChannel::advance_audio_clock(uint8_t AUDC)
+uint8_t TIAAudioChannel::advance_audio_clock(uint8_t AUDC)
 {
     switch(AUDC & 0xF) {
         case 0x0: case 0xb: default:
@@ -748,7 +747,7 @@ uint8_t TIAChannel::advance_audio_clock(uint8_t AUDC)
     }
 }
 
-uint8_t TIAChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC, int& counter)
+uint8_t TIAAudioChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC, int& counter)
 {
     using namespace Stella;
 
@@ -803,7 +802,7 @@ struct stella
     clk_t next_audio_clock = 0;
     clk_t clock_rate = 3579540;
     static constexpr clk_t video_clocks_per_audio_clock = 114;
-    TIAChannel audio_channels[2];
+    TIAAudioChannel audio_channels[2];
     uint32_t stereoU8SampleRate;
     size_t preferredAudioBufferSizeBytes;
     std::vector<unsigned char> audio_buffer;
@@ -1281,7 +1280,7 @@ struct stella
 
         bool replicateY = false;
         bool replicateZ = false;
-        int offsetYZ = 16;
+        int offsetY, offsetZ;
         bool shift = 0;
 
         switch(nusiz & 0x7) {
@@ -1289,18 +1288,21 @@ struct stella
                 break;
             case 1: /* X.Y....... */
                 replicateY = true;
+                offsetY = 16;
                 break;
             case 2: /* X...Y..... */
                 replicateY = true;
-                offsetYZ = 32;
+                offsetY = 32;
                 break;
             case 3: /* X.Y.Z..... */
                 replicateY = true;
                 replicateZ = true;
+                offsetY = 16;
+                offsetZ = 32;
                 break;
             case 4: /* X.......Y. */
                 replicateY = true;
-                offsetYZ = 64;
+                offsetY = 64;
                 break;
             case 5: /* XX........ */
                 shift = 1;
@@ -1308,7 +1310,8 @@ struct stella
             case 6: /* X...Y...Z. */
                 replicateY = true;
                 replicateZ = true;
-                offsetYZ = 32;
+                offsetY = 32;
+                offsetZ = 64;
                 break;
             case 7: /* XXXX...... */
                 shift = 2;
@@ -1318,10 +1321,10 @@ struct stella
         int bit_index;
         if((counter >> shift) < 8) {
             bit_index = counter >> shift;
-        } else if(replicateY && ((counter - offsetYZ) < 8)) {
-            bit_index = counter - offsetYZ;
-        } else if(replicateZ && ((counter - offsetYZ * 2) < 8)) {
-            bit_index = counter - offsetYZ * 2;
+        } else if(replicateY && (counter >= offsetY) && ((counter - offsetY) < 8)) {
+            bit_index = counter - offsetY;
+        } else if(replicateZ && (counter >= offsetZ) && ((counter - offsetZ) < 8)) {
+            bit_index = counter - offsetZ;
         } else {
             return 0;
         }
@@ -1339,7 +1342,7 @@ struct stella
         
         bool replicateY = false;
         bool replicateZ = false;
-        int offsetYZ = 16;
+        int offsetY, offsetZ;
         bool shift = (nusiz >> 4) & 0x03;
 
         switch(nusiz & 0x7) {
@@ -1347,10 +1350,11 @@ struct stella
                 break;
             case 1: /* X.Y....... */
                 replicateY = true;
+                offsetY = 16;
                 break;
             case 2: /* X...Y..... */
                 replicateY = true;
-                offsetYZ = 32;
+                offsetY = 32;
                 break;
             case 3: /* X.Y.Z..... */
                 replicateY = true;
@@ -1358,14 +1362,15 @@ struct stella
                 break;
             case 4: /* X.......Y. */
                 replicateY = true;
-                offsetYZ = 64;
+                offsetY = 64;
                 break;
             case 5: /* ?? */
                 break;
             case 6: /* X...Y...Z. */
                 replicateY = true;
                 replicateZ = true;
-                offsetYZ = 32;
+                offsetY = 32;
+                offsetZ = 64;
                 break;
             case 7: /* ?? */
                 break;
@@ -1373,9 +1378,9 @@ struct stella
 
         if((counter >> shift) == 0) {
             return 1;
-        } else if(replicateY && ((counter - offsetYZ) == 0)) {
+        } else if(replicateY && (counter >= offsetY) && ((counter - offsetY) == 0)) {
             return 1;
-        } else if(replicateZ && ((counter - offsetYZ * 2) == 0)) {
+        } else if(replicateZ && (counter >= offsetZ) && ((counter - offsetZ) == 0)) {
             return 1;
         } else {
             return 0;
@@ -1415,13 +1420,15 @@ struct stella
         // Players
 
         int p0 = 0;
-        if(tia_write[GRP0] != 0) {
-            p0 = get_player_bit(P0counter, tia_write[GRP0], tia_write[NUSIZ0], tia_write[REFP0]);
+        uint8_t grp0 = tia_write[GRP0];
+        if(grp0 != 0) {
+            p0 = get_player_bit(P0counter, grp0, tia_write[NUSIZ0], tia_write[REFP0]);
         }
 
         int p1 = 0;
-        if(tia_write[GRP1] != 0) {
-            p1 = get_player_bit(P1counter, tia_write[GRP1], tia_write[NUSIZ1], tia_write[REFP1]);
+        uint8_t grp1 = tia_write[GRP1];
+        if(grp1 != 0) {
+            p1 = get_player_bit(P1counter, grp1, tia_write[NUSIZ1], tia_write[REFP1]);
         }
 
         // Missiles
@@ -1439,7 +1446,8 @@ struct stella
         // Ball
 
         int bl = 0;
-        if(tia_write[ENABL] & ENABL_ENABLED) {
+        int enabl = tia_write[ENABL];
+        if(enabl & ENABL_ENABLED) {
             bl = get_ball_bit(BLcounter, tia_write[CTRLPF]);
         }
 
