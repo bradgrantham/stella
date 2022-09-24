@@ -762,6 +762,40 @@ uint8_t TIAAudioChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC,
     return 128 + (sound_bit ? -128 : 127 ) * AUDV / 15;
 }
 
+struct object_counter
+{
+    uint8_t counter = 0;
+    uint8_t period;
+    uint8_t reset_timer = 0;
+    object_counter(uint8_t period) :
+        period(period)
+    {}
+    operator uint8_t()
+    {
+        return counter;
+    }
+    void reset(uint8_t latency)
+    {
+        reset_timer = latency;
+    }
+    void advance()
+    {
+        if(reset_timer == 1) {
+            counter = 0;
+        } else {
+            counter = (counter + 1) % period;
+        }
+        if(reset_timer > 0) {
+            reset_timer--;
+        }
+    }
+
+    void move(uint8_t move_register)
+    {
+        counter = (counter + Stella::get_signed_move(move_register) + period) % period;
+    }
+};
+
 struct stella 
 {
     enum {
@@ -770,7 +804,7 @@ struct stella
         DEBUG_PIA = 0x0004,
         DEBUG_RAM = 0x0008,
     };
-    static constexpr uint32_t debug = 0;
+    static constexpr uint32_t debug = 0; // DEBUG_TIA;
 
     std::array<uint8_t, 128> RAM;
     std::vector<uint8_t> ROM;
@@ -779,11 +813,11 @@ struct stella
     uint32_t horizontal_clock = 0;
     uint32_t scanline = 0;
 
-    uint8_t P0counter = 0;
-    uint8_t P1counter = 0;
-    uint8_t M0counter = 0;
-    uint8_t M1counter = 0;
-    uint8_t BLcounter = 0;
+    object_counter P0counter{Stella::visible_pixels};
+    object_counter P1counter{Stella::visible_pixels};
+    object_counter M0counter{Stella::visible_pixels};
+    object_counter M1counter{Stella::visible_pixels};
+    object_counter BLcounter{Stella::visible_pixels};
 
     uint32_t interval_timer_subcounter = 2;
     uint32_t interval_timer_prescaler = 1;
@@ -874,16 +908,14 @@ struct stella
         previous_audio_processing_clock = current_audio_processing_clock;
     }
 
-    void advance_counters(bool in_hblank)
+    void advance_object_counters()
     {
         using namespace Stella;
-        if(!in_hblank) {
-            P0counter = (P0counter + 1) % visible_pixels;
-            P1counter = (P1counter + 1) % visible_pixels;
-            M0counter = (M0counter + 1) % visible_pixels;
-            M1counter = (M1counter + 1) % visible_pixels;
-            BLcounter = (BLcounter + 1) % visible_pixels;
-        }
+        P0counter.advance();
+        P1counter.advance();
+        M0counter.advance();
+        M1counter.advance();
+        BLcounter.advance();
     }
 
     uint8_t tia_write[64];
@@ -1037,8 +1069,8 @@ struct stella
             // XXX TODO
         } else if(isTIA(addr)) {
             uint8_t reg = addr & 0x3F;
+            if(debug & DEBUG_TIA) { printf("(%3d, %3d) wrote %02X to %02X (%s)\n", scanline, horizontal_clock, data, reg, TIA_register_names[reg].c_str()); }
             if(reg == VSYNC) {
-                if(debug & DEBUG_TIA) { printf("wrote %02X to VSYNC\n", data); }
                 if(data & VSYNC_SET) {
                     // printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
                     vsync_enabled = true;
@@ -1072,19 +1104,17 @@ struct stella
                 // Apply the motion registers to players, missles, and ball
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 // printf("move P0 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP0]));
-                // printf("move P1 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP1]));
-                // printf("move BL %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMBL]));
-                P0counter = (P0counter + get_signed_move(tia_write[HMP0]) + visible_pixels) % visible_pixels;
-                P1counter = (P1counter + get_signed_move(tia_write[HMP1]) + visible_pixels) % visible_pixels;
-                M0counter = (M0counter + get_signed_move(tia_write[HMM0]) + visible_pixels) % visible_pixels;
-                M1counter = (M1counter + get_signed_move(tia_write[HMM1]) + visible_pixels) % visible_pixels;
-                BLcounter = (BLcounter + get_signed_move(tia_write[HMBL]) + visible_pixels) % visible_pixels;
+                P0counter.move(tia_write[HMP0]);
+                P1counter.move(tia_write[HMP1]);
+                M0counter.move(tia_write[HMM0]);
+                M1counter.move(tia_write[HMM1]);
+                BLcounter.move(tia_write[HMBL]);
             } else if(reg == RESMP1) {
                 // XXX handle hid/lock bit
-                M0counter = P0counter;
+                M0counter.counter = P0counter.counter;
             } else if(reg == RESMP0) {
                 // XXX handle hid/lock bit
-                M1counter = P1counter;
+                M1counter.counter = P1counter.counter;
             } else if(reg == VDELBL) {
                 tia_write[VDELBL] = data;
             } else if(reg == VDELP1) {
@@ -1112,26 +1142,14 @@ struct stella
             } else if(reg == ENAM0) {
                 tia_write[ENAM0] = data;
             } else if(reg == GRP1) {
-                if(VDELBL & VDEL_ENABLED) {
-                    tia_write[ENABL] = ENABLA;
-                }
-                if(VDELP0 & VDEL_ENABLED) {
-                    tia_write[GRP0] = GRP0A;
-                }
-                if(VDELP1 & VDEL_ENABLED) {
-                    GRP1A = data;
-                } else {
-                    tia_write[GRP1] = data;
-                }
+                ENABLA = tia_write[ENABL];
+                GRP0A = tia_write[GRP0];
+                tia_write[GRP1] = data;
+                // printf("%02X %02X %02X %02X\n", tia_write[GRP0], GRP0A, tia_write[GRP1], GRP1A);
             } else if(reg == GRP0) {
-                if(VDELP1 & VDEL_ENABLED) {
-                    tia_write[GRP1] = GRP1A;
-                }
-                if(VDELP0 & VDEL_ENABLED) {
-                    GRP0A = data;
-                } else {
-                    tia_write[GRP0] = data;
-                }
+                GRP1A = tia_write[GRP1];
+                tia_write[GRP0] = data;
+                // printf("%02X %02X %02X %02X\n", tia_write[GRP0], GRP0A, tia_write[GRP1], GRP1A);
             } else if(reg == AUDV1) {
                 // printf("AUDV1,%llu,%d,%d\n", (clk_t)clk, reg, data);
                 tia_write[AUDV1] = data;
@@ -1151,41 +1169,28 @@ struct stella
                 // printf("AUDC0,%llu,%d,%d\n", (clk_t)clk, reg, data);
                 tia_write[AUDC0] = data;
             } else if(reg == RESBL) {
+                bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                if(horizontal_clock < hblank_pixels) {
-                    printf("RESBL during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
-                } else {
-                    printf("RESBL outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
-                }
-                BLcounter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 6) : (visible_pixels - 14);
+                BLcounter.reset(within_hblank ? 9 : 14);
             } else if(reg == RESM1) {
+                bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                M1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 9) : (visible_pixels - 14);
+                M1counter.reset(within_hblank ? 9 : 14);
             } else if(reg == RESM0) { 
+                bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                M0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 9) : (visible_pixels - 14);
+                M0counter.reset(within_hblank ? 9 : 14);
             } else if(reg == RESP1) {
-                if(horizontal_clock < hblank_pixels) {
-                    // printf("RESP1 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
-                } else {
-                    // printf("RESP1 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
-                }
-                P1counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 6) : (visible_pixels - 17);
+                bool within_hblank = horizontal_clock < hblank_pixels;
+                P1counter.reset(within_hblank ? 6 : 17);
             } else if(reg == RESP0) {
-                if(horizontal_clock < hblank_pixels) {
-                    // printf("RESP0 during hblank, %d -> %d\n", horizontal_clock, visible_pixels - 3);
-                } else {
-                    // printf("RESP0 outside hblank, %d -> %d\n", horizontal_clock, visible_pixels + 23);
-                }
-                P0counter = (horizontal_clock < hblank_pixels) ? (visible_pixels - 6) : (visible_pixels - 17);
+                bool within_hblank = horizontal_clock < hblank_pixels;
+                P0counter.reset(within_hblank ? 6 : 17);
             } else if(reg == PF2) {
-                // printf("line %3d, wrote PF2 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF2] = data;
             } else if(reg == PF1) {
-                // printf("line %3d, wrote PF1 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF1] = data;
             } else if(reg == PF0) {
-                // printf("line %3d, wrote PF0 at %lld/%d (playfield %d)\n", scanline, (clk_t)clk, horizontal_clock, ((int)horizontal_clock - (int)hblank_pixels) / 4);
                 tia_write[PF0] = data;
             } else if(reg == REFP1) {
                 tia_write[REFP1] = data;
@@ -1274,7 +1279,7 @@ struct stella
     int get_player_bit(uint8_t counter, uint8_t grp, uint8_t nusiz, uint8_t refp)
     {
         using namespace Stella;
-        
+
         // XXX This can't be right, but it's what I measured...
         // counter = (counter - 24 + 160) % 160;
 
@@ -1420,15 +1425,19 @@ struct stella
         // Players
 
         int p0 = 0;
-        uint8_t grp0 = tia_write[GRP0];
-        if(grp0 != 0) {
-            p0 = get_player_bit(P0counter, grp0, tia_write[NUSIZ0], tia_write[REFP0]);
+        {
+            uint8_t grp0 = (tia_write[VDELP0] & VDEL_ENABLED) ? GRP0A : tia_write[GRP0];
+            if(grp0 != 0) {
+                p0 = get_player_bit(P0counter, grp0, tia_write[NUSIZ0], tia_write[REFP0]);
+            }
         }
 
         int p1 = 0;
-        uint8_t grp1 = tia_write[GRP1];
-        if(grp1 != 0) {
-            p1 = get_player_bit(P1counter, grp1, tia_write[NUSIZ1], tia_write[REFP1]);
+        {
+            uint8_t grp1 = (tia_write[VDELP1] & VDEL_ENABLED) ? GRP1A : tia_write[GRP1];
+            if(grp1 != 0) {
+                p1 = get_player_bit(P1counter, grp1, tia_write[NUSIZ1], tia_write[REFP1]);
+            }
         }
 
         // Missiles
@@ -1446,7 +1455,7 @@ struct stella
         // Ball
 
         int bl = 0;
-        int enabl = tia_write[ENABL];
+        int enabl = (tia_write[VDELBL] & VDEL_ENABLED) ? ENABLA : tia_write[ENABL];
         if(enabl & ENABL_ENABLED) {
             bl = get_ball_bit(BLcounter, tia_write[CTRLPF]);
         }
@@ -1529,7 +1538,9 @@ struct stella
             }
         }
 
-        advance_counters(within_hblank);
+        if(!within_hblank) {
+            advance_object_counters();
+        }
         advance_interval_timer();
         advance_sound_clock();
 
