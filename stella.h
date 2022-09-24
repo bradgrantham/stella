@@ -1,4 +1,5 @@
 #include <cinttypes>
+#include <unordered_map>
 
 namespace Stella
 {
@@ -136,5 +137,52 @@ namespace Stella
         return motion;
     }
 
+    std::unordered_map<uint8_t, std::string> TIA_register_names = {
+        {CXCLR, "CXCLR"},
+        {HMCLR, "HMCLR"},
+        {HMOVE, "HMOVE"},
+        {RESMP1, "RESMP1"},
+        {RESMP0, "RESMP0"},
+        {VDELBL, "VDELBL"},
+        {VDELP1, "VDELP1"},
+        {VDELP0, "VDELP0"},
+        {HMBL, "HMBL"},
+        {HMM1, "HMM1"},
+        {HMM0, "HMM0"},
+        {HMP1, "HMP1"},
+        {HMP0, "HMP0"},
+        {ENABL, "ENABL"},
+        {ENAM1, "ENAM1"},
+        {ENAM0, "ENAM0"},
+        {GRP1, "GRP1"},
+        {GRP0, "GRP0"},
+        {AUDV1, "AUDV1"},
+        {AUDV0, "AUDV0"},
+        {AUDF1, "AUDF1"},
+        {AUDF0, "AUDF0"},
+        {AUDC1, "AUDC1"},
+        {AUDC0, "AUDC0"},
+        {RESBL, "RESBL"},
+        {RESM1, "RESM1"},
+        {RESM0, "RESM0"},
+        {RESP1, "RESP1"},
+        {RESP0, "RESP0"},
+        {PF2, "PF2"},
+        {PF1, "PF1"},
+        {PF0, "PF0"},
+        {REFP1, "REFP1"},
+        {REFP0, "REFP0"},
+        {CTRLPF, "CTRLPF"},
+        {COLUBK, "COLUBK"},
+        {COLUPF, "COLUPF"},
+        {COLUP1, "COLUP1"},
+        {COLUP0, "COLUP0"},
+        {NUSIZ1, "NUSIZ1"},
+        {NUSIZ0, "NUSIZ0"},
+        {RSYNC, "RSYNC"},
+        {WSYNC, "WSYNC"},
+        {VBLANK, "VBLANK"},
+        {VSYNC, "VSYNC"},
+    };
 };
 
