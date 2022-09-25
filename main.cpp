@@ -384,6 +384,7 @@ void Start(uint32_t& stereoU8SampleRate, size_t& preferredAudioBufferSizeBytes)
     audio_device = SDL_OpenAudioDevice(nullptr, 0, &audiospec, &obtained, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE); // | SDL_AUDIO_ALLOW_FORMAT_CHANGE);
     assert(audio_device > 0);
     assert(obtained.channels == audiospec.channels);
+    assert(obtained.format == audiospec.format);
 
     switch(obtained.format) {
         case AUDIO_U8: {
@@ -759,7 +760,7 @@ uint8_t TIAAudioChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC,
         counter = AUDF;
     }
 
-    return 128 + (sound_bit ? -128 : 127 ) * AUDV / 15;
+    return 128 + (sound_bit ? -128 : 127 ) * (AUDV & 0xF) / 15;
 }
 
 struct object_counter
@@ -804,7 +805,7 @@ struct stella
         DEBUG_PIA = 0x0004,
         DEBUG_RAM = 0x0008,
     };
-    static constexpr uint32_t debug = 0; // DEBUG_TIA;
+    static constexpr uint32_t debug = 0 ; DEBUG_TIA;
 
     std::array<uint8_t, 128> RAM;
     std::vector<uint8_t> ROM;
@@ -929,6 +930,7 @@ struct stella
         ROM(std::move(ROM)),
         clk(clock)
     {
+        using namespace Stella;
         if(ROM.size() == 0x800) {
             ROM_address_mask = 0x7ff;
         } else if(ROM.size() == 0x1000) {
@@ -938,6 +940,8 @@ struct stella
             abort();
         }
         memset(screen, 0, sizeof(screen));
+        tia_write[AUDV0] = 0;
+        tia_write[AUDV1] = 0;
         PlatformInterface::Start(stereoU8SampleRate, preferredAudioBufferSizeBytes);
     }
 
@@ -1171,15 +1175,15 @@ struct stella
             } else if(reg == RESBL) {
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                BLcounter.reset(within_hblank ? 9 : 14);
+                BLcounter.reset(within_hblank ? 4 : 15);
             } else if(reg == RESM1) {
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                M1counter.reset(within_hblank ? 9 : 14);
+                M1counter.reset(within_hblank ? 4 : 15);
             } else if(reg == RESM0) { 
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 // PROBABLY WRONG
-                M0counter.reset(within_hblank ? 9 : 14);
+                M0counter.reset(within_hblank ? 4 : 15);
             } else if(reg == RESP1) {
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 P1counter.reset(within_hblank ? 6 : 17);
