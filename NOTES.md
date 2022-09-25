@@ -1,9 +1,8 @@
 TODO
 * RESP0, RESP1 without HMOVE and VDELPx+GRPxA
   * What does VCS do?  Stellarator? - do experiments at boundaries of timing
-
+* Why is audio popping at start?
 * VDELPx+GRPxA
-
 * HMOVE
 * At this point all sprites should look correct including high scores, bigsprite.a26
 * Ball, missiles
