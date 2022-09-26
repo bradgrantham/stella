@@ -26,7 +26,9 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#ifndef EMULATE_65C02
 #define EMULATE_65C02 1
+#endif /* EMULATE_65C02 */
 
 template<class CLK, class BUS>
 struct CPU6502
@@ -1621,6 +1623,26 @@ struct CPU6502
                 break;
             }
 
+            case 0x75: { // ADC zpg, X
+                uint8_t zpg = read_pc_inc();
+                uint16_t addr = (zpg + x)& 0xFF;
+                m = bus.read(addr);
+                uint8_t carry = isset(C) ? 1 : 0;
+                if(isset(D)) {
+                    uint8_t bcd = a / 16 * 10 + a % 16;
+                    flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
+                    flag_change(V, adc_overflow_d(bcd, m, carry));
+                    set_flags(N | Z, bcd = bcd + m + carry);
+                    a = bcd / 10 * 16 + bcd % 10;
+                } else {
+                    flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
+                    flag_change(V, adc_overflow(a, m, carry));
+                    set_flags(N | Z, a = a + m + carry);
+                }
+                break;
+            }
+
+
 #if EMULATE_65C02
             // 65C02 instructions
 
@@ -1733,25 +1755,6 @@ struct CPU6502
                 break;
             }
 
-            case 0x75: { // ADC zpg, X
-                uint8_t zpg = read_pc_inc();
-                uint16_t addr = (zpg + x)& 0xFF;
-                m = bus.read(addr);
-                uint8_t carry = isset(C) ? 1 : 0;
-                if(isset(D)) {
-                    uint8_t bcd = a / 16 * 10 + a % 16;
-                    flag_change(C, ((uint16_t)bcd + (uint16_t)m + carry) > 99);
-                    flag_change(V, adc_overflow_d(bcd, m, carry));
-                    set_flags(N | Z, bcd = bcd + m + carry);
-                    a = bcd / 10 * 16 + bcd % 10;
-                } else {
-                    flag_change(C, ((uint16_t)a + (uint16_t)m + carry) > 0xFF);
-                    flag_change(V, adc_overflow(a, m, carry));
-                    set_flags(N | Z, a = a + m + carry);
-                }
-                break;
-            }
-
             case 0x3A: { // DEC, 65C02
                 set_flags(N | Z, a = a - 1);
                 break;
@@ -1783,7 +1786,7 @@ struct CPU6502
                 break;
             }
 
-            case 0x1C: { // TRB abs
+            case 0x1C: { // TRB abs, 65C02 instruction
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
@@ -1793,7 +1796,7 @@ struct CPU6502
                 break;
             }
 
-            case 0x14: { // TRB zpg
+            case 0x14: { // TRB zpg, 65C02 instruction
                 uint8_t zpgaddr = read_pc_inc();
                 m = bus.read(zpgaddr);
                 set_flags(Z, m & a);
@@ -1801,7 +1804,7 @@ struct CPU6502
                 break;
             }
 
-            case 0x0C: { // TSB abs
+            case 0x0C: { // TSB abs, 65C02 instruction
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
@@ -1811,7 +1814,7 @@ struct CPU6502
                 break;
             }
 
-            case 0x04: { // TRB zpg
+            case 0x04: { // TRB zpg, 65C02 instruction
                 uint8_t zpgaddr = read_pc_inc();
                 m = bus.read(zpgaddr);
                 set_flags(Z, m & a);
@@ -1863,7 +1866,7 @@ struct CPU6502
                 break;
             }
 
-            case 0x7C: { // JMP (ind, X)
+            case 0x7C: { // JMP (ind, X), 65C02 instruction
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256 + x;
@@ -1888,7 +1891,16 @@ struct CPU6502
                 break;
             }
 
-#endif // EMULATE_65C02
+#else /* ! EMULATE_65C02 */
+
+            case 0x04: { // NOP zpg
+                uint8_t zpgaddr = read_pc_inc();
+                m = bus.read(zpgaddr);
+                break;
+            }
+
+
+#endif /* EMULATE_65C02 */
 
             default:
                 printf("unhandled instruction %02X at %04X\n", inst, pc - 1);
@@ -1903,6 +1915,7 @@ struct CPU6502
 template<class CLK, class BUS>
 const int32_t CPU6502<CLK, BUS>::cycles[256] =
 {
+#if EMULATE_65C02
     /*         0  1  2  3  4  5  6  7  8  9  0  A  B  C  D  E  */
     /* 0x0- */ 7, 6, 2, 1, 5, 3, 5, 0, 3, 2, 2, 1, 6, 4, 6, 5,
     /* 0x1- */ 2, 5, 5, 1, 5, 4, 6, 0, 2, 4, 2, 1, 6, 4, 7, 5,
@@ -1920,6 +1933,25 @@ const int32_t CPU6502<CLK, BUS>::cycles[256] =
     /* 0xD- */ 2, 5, 5, 1, 4, 4, 6, 0, 2, 4, 3, 1, 4, 4, 7, 5,
     /* 0xE- */ 2, 6, 2, 1, 3, 3, 5, 0, 2, 2, 2, 2, 4, 4, 6, 5,
     /* 0xF- */ 2, 5, 0, 1, 4, 4, 6, 0, 2, 4, 4, 1, 4, 4, 7, 5,
+#else /* ! EMULATE_65C02 */
+    /*         0  1  2  3  4  5  6  7  8  9  0  A  B  C  D  E  */
+    /* 0x0- */ 7, 6, 2, 1, 3, 3, 5, 0, 3, 2, 2, 1, 6, 4, 6, 5,
+    /* 0x1- */ 2, 5, 5, 1, 5, 4, 6, 0, 2, 4, 2, 1, 6, 4, 7, 5,
+    /* 0x2- */ 6, 6, 2, 1, 3, 3, 5, 0, 4, 2, 2, 1, 4, 4, 6, 5,
+    /* 0x3- */ 2, 5, 0, 1, 0, 4, 6, 0, 2, 4, 2, 1, 0, 4, 7, 5,
+    /* 0x4- */ 6, 6, 2, 1, 3, 3, 5, 0, 3, 2, 2, 1, 3, 4, 6, 5,
+    /* 0x5- */ 2, 5, 0, 1, 4, 4, 6, 0, 2, 4, 3, 1, 8, 4, 7, 5,
+    /* 0x6- */ 6, 6, 2, 1, 3, 3, 5, 0, 4, 2, 2, 1, 5, 4, 6, 5,
+    /* 0x7- */ 2, 5, 5, 1, 0, 4, 6, 0, 2, 4, 4, 1, 6, 4, 7, 5,
+    /* 0x8- */ 2, 6, 2, 1, 3, 3, 3, 0, 2, 2, 2, 1, 4, 4, 4, 5,
+    /* 0x9- */ 2, 6, 5, 1, 4, 4, 4, 0, 2, 5, 2, 1, 4, 5, 5, 5,
+    /* 0xA- */ 2, 6, 2, 1, 3, 3, 3, 0, 2, 2, 2, 1, 4, 4, 4, 5,
+    /* 0xB- */ 2, 5, 5, 1, 4, 4, 4, 0, 2, 4, 2, 1, 4, 4, 4, 5,
+    /* 0xC- */ 2, 6, 2, 1, 3, 3, 5, 0, 2, 2, 2, 1, 4, 4, 3, 5,
+    /* 0xD- */ 2, 5, 5, 1, 4, 4, 6, 0, 2, 4, 3, 1, 4, 4, 7, 5,
+    /* 0xE- */ 2, 6, 2, 1, 3, 3, 5, 0, 2, 2, 2, 2, 4, 4, 6, 5,
+    /* 0xF- */ 2, 5, 0, 1, 4, 4, 6, 0, 2, 4, 4, 1, 4, 4, 7, 5,
+#endif /* EMULATE_65C02 */
 };
 
 #endif // CPU6502_H
