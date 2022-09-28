@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <SDL2/SDL.h>
 
+#define EMULATE_65C02 0
 #include "cpu6502.h"
 #include "dis6502.h"
 
@@ -760,7 +761,7 @@ uint8_t TIAAudioChannel::advance_clock(uint8_t AUDV, uint8_t AUDF, uint8_t AUDC,
         counter = AUDF;
     }
 
-    return 128 + (sound_bit ? -128 : 127 ) * (AUDV & 0xF) / 15;
+    return 128 + (sound_bit ? -128 : 127 ) * (AUDV & 0xF) / 128;
 }
 
 struct object_counter
@@ -805,7 +806,7 @@ struct stella
         DEBUG_PIA = 0x0004,
         DEBUG_RAM = 0x0008,
     };
-    static constexpr uint32_t debug = 0 ; DEBUG_TIA;
+    static constexpr uint32_t debug = DEBUG_TIA;
 
     std::array<uint8_t, 128> RAM;
     std::vector<uint8_t> ROM;
@@ -1612,8 +1613,23 @@ int main(int argc, char **argv)
 
     sysclock clk;
     stella hw(ROM, clk);
-    CPU6502 cpu(clk, hw);
+
+    struct clock_handler
+    {
+        sysclock& clk;
+        stella& hw;
+        clock_handler(sysclock& clk, stella& hw) : clk(clk), hw(hw) {}
+        void add_cpu_cycles(int n) {
+            for(int i = 0; i < n; i++) {
+                clk.add_pixel_cycles(3);
+                hw.advance_to_clock(clk);
+            }
+        }
+    } clk_(clk, hw);
+
+    CPU6502 cpu(clk_, hw);
     cpu.reset();
+
     while(1) {
         if(false) {
             std::string dis = read_bus_and_disassemble(hw, cpu.pc);
@@ -1624,8 +1640,8 @@ int main(int argc, char **argv)
         if(hw.wait_for_hsync) {
             auto cycles = hw.advance_to_hsync(clk);
             clk.add_pixel_cycles(cycles);
-        } else {
-            hw.advance_to_clock(clk);
-        }
+        }// else {
+          //  hw.advance_to_clock(clk);
+        //}
     }
 }
