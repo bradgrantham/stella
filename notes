@@ -1,6 +1,0 @@
-audio implementation
-    hook up SDL audio
-    waveform is -128 for 0 and to 127 for 1, scaled by X/16 for volume
-    for i in kaboom pacman superbreakout yars ; do echo $i ; trace_to_pcm < $i.audio.txt  > $i.pcm_u8_2 ; sox -t u8 -c 2 -r 44100 -b 8 -e unsigned-integer $i.pcm_u8_2  $i.wav ; done
-sprites wrong place - everything and multisprite3.a26
-sprites jitter - Pac-Man
