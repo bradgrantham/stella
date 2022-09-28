@@ -57,9 +57,11 @@ struct CPU6502
         INT,
     } exception;
 
+    std::vector<std::pair<uint16_t, uint8_t>> writes;
+
     void stack_push(uint8_t d)
     {
-        bus.write(0x100 + s--, d);
+        writes.push_back(std::make_pair(0x100 + s--, d));
     }
 
     uint8_t stack_pull()
@@ -289,14 +291,14 @@ struct CPU6502
             case 0xC6: { // DEC zpg
                 uint8_t zpg = read_pc_inc();
                 set_flags(N | Z, m = bus.read(zpg) - 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
             case 0xD6: { // DEC zpg, X
                 uint8_t zpg = (read_pc_inc() + x) % 0xFF;
                 set_flags(N | Z, m = bus.read(zpg) - 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -305,7 +307,7 @@ struct CPU6502
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256 + x;
                 set_flags(N | Z, m = bus.read(addr) - 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -314,7 +316,7 @@ struct CPU6502
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
                 set_flags(N | Z, m = bus.read(addr) - 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -330,7 +332,7 @@ struct CPU6502
                 if((addr - x) / 256 != addr / 256)
                     clk.add_cpu_cycles(1);
                 set_flags(N | Z, m = bus.read(addr) + 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -339,21 +341,21 @@ struct CPU6502
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
                 set_flags(N | Z, m = bus.read(addr) + 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
             case 0xE6: { // INC zpg
                 uint8_t zpg = read_pc_inc();
                 set_flags(N | Z, m = bus.read(zpg) + 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
             case 0xF6: { // INC zpg, X
                 uint8_t zpg = (read_pc_inc() + x) & 0xFF;
                 set_flags(N | Z, m = bus.read(zpg) + 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -867,7 +869,7 @@ struct CPU6502
                 m = bus.read(addr);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = m << 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -876,7 +878,7 @@ struct CPU6502
                 m = bus.read(addr + x);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = m << 1);
-                bus.write(addr + x, m);
+                writes.push_back(std::make_pair(addr + x, m));
                 break;
             }
 
@@ -885,7 +887,7 @@ struct CPU6502
                 m = bus.read(zpg);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = m << 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -911,7 +913,7 @@ struct CPU6502
                 m = bus.read(addr + x);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = m >> 1);
-                bus.write(addr + x, m);
+                writes.push_back(std::make_pair(addr + x, m));
                 break;
             }
 
@@ -920,7 +922,7 @@ struct CPU6502
                 m = bus.read(zpg);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = m >> 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -929,7 +931,7 @@ struct CPU6502
                 m = bus.read(zpg & 0xFF);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = m >> 1);
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -940,7 +942,7 @@ struct CPU6502
                 m = bus.read(addr);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = m >> 1);
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -1114,7 +1116,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = (c ? 0x80 : 0x00) | (m >> 1));
-                bus.write(addr + x, m);
+                writes.push_back(std::make_pair(addr + x, m));
                 break;
             }
 
@@ -1124,7 +1126,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = (c ? 0x01 : 0x00) | (m << 1));
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -1137,7 +1139,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = (c ? 0x01 : 0x00) | (m << 1));
-                bus.write(addr + x, m);
+                writes.push_back(std::make_pair(addr + x, m));
                 break;
             }
 
@@ -1163,7 +1165,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = (c ? 0x80 : 0x00) | (m >> 1));
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -1173,7 +1175,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = (c ? 0x80 : 0x00) | (m >> 1));
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -1183,7 +1185,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x01);
                 set_flags(N | Z, m = (c ? 0x80 : 0x00) | (m >> 1));
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -1195,7 +1197,7 @@ struct CPU6502
                 bool c = isset(C);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = (c ? 0x01 : 0x00) | (m << 1));
-                bus.write(addr, m);
+                writes.push_back(std::make_pair(addr, m));
                 break;
             }
 
@@ -1206,7 +1208,7 @@ struct CPU6502
                 m = bus.read(zpg);
                 flag_change(C, m & 0x80);
                 set_flags(N | Z, m = (c ? 0x01 : 0x00) | (m << 1));
-                bus.write(zpg, m);
+                writes.push_back(std::make_pair(zpg, m));
                 break;
             }
 
@@ -1233,7 +1235,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr + x, a);
+                writes.push_back(std::make_pair(addr + x, a));
                 break;
             }
 
@@ -1241,7 +1243,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr + y, a);
+                writes.push_back(std::make_pair(addr + y, a));
                 break;
             }
 
@@ -1250,7 +1252,7 @@ struct CPU6502
                 uint8_t low = bus.read(zpg);
                 uint8_t high = bus.read((zpg + 1) & 0xFF);
                 uint16_t addr = low + high * 256 + y;
-                bus.write(addr, a);
+                writes.push_back(std::make_pair(addr, a));
                 break;
             }
 
@@ -1259,7 +1261,7 @@ struct CPU6502
                 uint8_t low = bus.read(zpg);
                 uint8_t high = bus.read((zpg + 1) & 0xFF);
                 uint16_t addr = low + high * 256;
-                bus.write(addr, a);
+                writes.push_back(std::make_pair(addr, a));
                 break;
             }
 
@@ -1267,7 +1269,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr, a);
+                writes.push_back(std::make_pair(addr, a));
                 break;
             }
 
@@ -1547,7 +1549,7 @@ struct CPU6502
 
             case 0x85: { // STA
                 uint8_t zpg = read_pc_inc();
-                bus.write(zpg, a);
+                writes.push_back(std::make_pair(zpg, a));
                 break;
             }
 
@@ -1582,26 +1584,26 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr, x);
+                writes.push_back(std::make_pair(addr, x));
                 break;
             }
 
             case 0x86: { // STX
                 uint8_t zpg = read_pc_inc();
-                bus.write(zpg, x);
+                writes.push_back(std::make_pair(zpg, x));
                 break;
             }
 
             case 0x96: { // STX zpg, Y
                 uint8_t zpg = read_pc_inc();
                 uint16_t addr = (zpg + y) & 0xFF;
-                bus.write(addr, x);
+                writes.push_back(std::make_pair(addr, x));
                 break;
             }
 
             case 0x84: { // STY
                 uint8_t zpg = read_pc_inc();
-                bus.write(zpg, y);
+                writes.push_back(std::make_pair(zpg, y));
                 break;
             }
 
@@ -1609,7 +1611,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr, y);
+                writes.push_back(std::make_pair(addr, y));
                 break;
             }
 
@@ -1699,7 +1701,7 @@ struct CPU6502
 
             case 0x64: { // STZ zpg, 65C02
                 uint8_t zpg = read_pc_inc();
-                bus.write(zpg, 0);
+                writes.push_back(std::make_pair(zpg, 0));
                 break;
             }
 
@@ -1707,7 +1709,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr, 0x0);
+                writes.push_back(std::make_pair(addr, 0x0));
                 break;
             }
 
@@ -1730,7 +1732,7 @@ struct CPU6502
                 uint8_t low = bus.read(zpg);
                 uint8_t high = bus.read((zpg + 1) & 0xFF);
                 uint16_t addr = low + high * 256;
-                bus.write(addr, a);
+                writes.push_back(std::make_pair(addr, a));
                 break;
             }
 
@@ -1792,7 +1794,7 @@ struct CPU6502
                 uint16_t addr = low + high * 256;
                 m = bus.read(addr);
                 set_flags(Z, m & a);
-                bus.write(addr, m & ~a);
+                writes.push_back(std::make_pair(addr, m & ~a));
                 break;
             }
 
@@ -1800,7 +1802,7 @@ struct CPU6502
                 uint8_t zpgaddr = read_pc_inc();
                 m = bus.read(zpgaddr);
                 set_flags(Z, m & a);
-                bus.write(zpgaddr, m & ~a);
+                writes.push_back(std::make_pair(zpgaddr, m & ~a));
                 break;
             }
 
@@ -1810,7 +1812,7 @@ struct CPU6502
                 uint16_t addr = low + high * 256;
                 m = bus.read(addr);
                 set_flags(Z, m & a);
-                bus.write(addr, m | a);
+                writes.push_back(std::make_pair(addr, m | a));
                 break;
             }
 
@@ -1818,7 +1820,7 @@ struct CPU6502
                 uint8_t zpgaddr = read_pc_inc();
                 m = bus.read(zpgaddr);
                 set_flags(Z, m & a);
-                bus.write(zpgaddr, m | a);
+                writes.push_back(std::make_pair(zpgaddr, m | a));
                 break;
             }
 
@@ -1887,7 +1889,7 @@ struct CPU6502
                 uint8_t low = read_pc_inc();
                 uint8_t high = read_pc_inc();
                 uint16_t addr = low + high * 256;
-                bus.write(addr + x, 0);
+                writes.push_back(std::make_pair(addr + x, 0));
                 break;
             }
 
@@ -1908,7 +1910,15 @@ struct CPU6502
                 exit(1);
         }
         assert(cycles[inst] > 0);
-        clk.add_cpu_cycles(cycles[inst]);
+        // Hack for putting writes near the end of the instruction to hopefully
+        // match real timing
+        clk.add_cpu_cycles(cycles[inst] - writes.size());
+        for(size_t i = 0; i < writes.size(); i++) {
+            const auto& write = writes[i];
+            clk.add_cpu_cycles(1);
+            bus.write(write.first, write.second);
+        }
+        writes.clear();
     }
 };
 
