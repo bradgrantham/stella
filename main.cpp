@@ -778,7 +778,7 @@ struct object_counter
     }
     void reset(uint8_t latency)
     {
-        reset_timer = latency;
+        reset_timer = latency + 1;
     }
     void advance()
     {
@@ -913,7 +913,9 @@ struct stella
     void advance_object_counters()
     {
         using namespace Stella;
+        // printf("P0 advance at %d, current is %d,", horizontal_clock, (int)P0counter);
         P0counter.advance();
+        // printf("advanced to %d\n", (int)P0counter);
         P1counter.advance();
         M0counter.advance();
         M1counter.advance();
@@ -1189,8 +1191,16 @@ struct stella
                 bool within_hblank = horizontal_clock < hblank_pixels;
                 P1counter.reset(within_hblank ? 6 : 17);
             } else if(reg == RESP0) {
-                bool within_hblank = horizontal_clock < hblank_pixels;
-                P0counter.reset(within_hblank ? 6 : 17);
+                // bool within_hblank = horizontal_clock < hblank_pixels;
+                // P0counter.reset(within_hblank ? 6 : 17);
+                if(horizontal_clock < hblank_pixels) {
+                    P0counter.reset(3);
+                } else if(horizontal_clock == hblank_pixels) {
+                    P0counter.reset(5);
+                } else {
+                    P0counter.reset(5);
+                }
+                printf("P0 reset at %d, current is %d, reset is %d\n", horizontal_clock, (int)P0counter, (int)P0counter.reset_timer);
             } else if(reg == PF2) {
                 tia_write[PF2] = data;
             } else if(reg == PF1) {
@@ -1405,7 +1415,7 @@ struct stella
         return (counter >> shift) == 0;
     }
 
-    uint8_t do_pixel_work()
+    uint8_t evaluate_pixel_color()
     {
         using namespace Stella;
 
@@ -1524,15 +1534,27 @@ struct stella
     {
         using namespace Stella;
 
-        bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < hblank_pixels);
+	// Do all the work for this clock except leave horizontal_clock
+	// and scanline until the end since other operations use them
 
-        int color = do_pixel_work();
+        bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < hblank_pixels);
+        if(!within_hblank) {
+            advance_object_counters();
+        }
+
+        advance_interval_timer();
+
+        advance_sound_clock();
+
+        int color = evaluate_pixel_color();
 
         if(mark_cpu_wait) {
             color = 0x0F;
         }
 
         set_colu(horizontal_clock, scanline, color);
+
+        // And then move forward the horizontal clock and scanline
 
         horizontal_clock++;
         if(horizontal_clock >= clocks_per_line) {
@@ -1542,12 +1564,6 @@ struct stella
                 scanline = 0;
             }
         }
-
-        if(!within_hblank) {
-            advance_object_counters();
-        }
-        advance_interval_timer();
-        advance_sound_clock();
 
         return within_hblank;
     }
@@ -1631,7 +1647,7 @@ int main(int argc, char **argv)
     cpu.reset();
 
     while(1) {
-        if(false) {
+        if(true) {
             std::string dis = read_bus_and_disassemble(hw, cpu.pc);
             printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
         }
