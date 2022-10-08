@@ -769,24 +769,31 @@ struct object_counter
     uint8_t counter = 0;
     uint8_t period;
     uint8_t reset_timer = 0;
+    bool reset_pending = false;
+
     object_counter(uint8_t period) :
         period(period)
     {}
+
     operator uint8_t()
     {
         return counter;
     }
+
     void reset(uint8_t latency)
     {
-        reset_timer = latency + 1;
+        reset_timer = latency;
+        reset_pending = true;
     }
+
     void advance()
     {
-        if(reset_timer == 1) {
-            counter = 0;
-        } else {
-            counter = (counter + 1) % period;
-        }
+        bool reset = reset_pending && (reset_timer == 0);
+
+        counter = !reset ? ((counter + 1) % period) : 0;
+
+        reset_pending = (reset_timer > 0);
+
         if(reset_timer > 0) {
             reset_timer--;
         }
@@ -1189,17 +1196,10 @@ struct stella
                 M0counter.reset(within_hblank ? 4 : 15);
             } else if(reg == RESP1) {
                 bool within_hblank = horizontal_clock < hblank_pixels;
-                P1counter.reset(within_hblank ? 6 : 17);
+                P1counter.reset(within_hblank ? 3 : 5);
             } else if(reg == RESP0) {
-                // bool within_hblank = horizontal_clock < hblank_pixels;
-                // P0counter.reset(within_hblank ? 6 : 17);
-                if(horizontal_clock < hblank_pixels) {
-                    P0counter.reset(3);
-                } else if(horizontal_clock == hblank_pixels) {
-                    P0counter.reset(5);
-                } else {
-                    P0counter.reset(5);
-                }
+                bool within_hblank = horizontal_clock < hblank_pixels;
+                P0counter.reset(within_hblank ? 3 : 5);
                 printf("P0 reset at %d, current is %d, reset is %d\n", horizontal_clock, (int)P0counter, (int)P0counter.reset_timer);
             } else if(reg == PF2) {
                 tia_write[PF2] = data;
