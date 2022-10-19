@@ -1948,7 +1948,7 @@ struct CPU6502
         // Hack for putting writes near the end of the instruction to hopefully
         // match real timing
         clk.add_cpu_cycles(cycles[inst] - pending_writes_count);
-        for(size_t i = 0; i < pending_writes_count; i++) {
+        for(int i = 0; i < pending_writes_count; i++) {
             clk.add_cpu_cycles(1);
             bus.write(pending_writes_address[i], pending_writes_data[i]);
         }
