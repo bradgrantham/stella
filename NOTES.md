@@ -1,5 +1,6 @@
 TODO
-* RESP0, RESP1 without HMOVE and VDELPx+GRPxA (is playfield also delayed relative to WSYNC?)
+* RESP0, RESP1 without HMOVE and VDELPx+GRPxA - *very close*, bigsprite shows positioned correctly
+* VDELPx+GRPxA (is playfield also delayed relative to WSYNC?)
   * might be correct now?
   * Setting COLUBK after 
   * Complicated sprite positioning routing at https://bumbershootsoft.wordpress.com/2018/08/30/an-arbitrary-sprite-positioning-routine-for-the-atari-2600/ with a magic number for RESP0
@@ -25,8 +26,9 @@ hence the magic '5' :)
 | 20 (60)                                    | 69                                 | 6 (74)             |
 | 21 (63)                                    | 72                                 | 9 (77)             |
 
-* VDELPx+GRPxA
-* HMOVE
+* HMOVE in HBLANK and HMOVE in weird places
+  * My output matches bigsprite.a26 plus various HMOVE values
+  * My output matches timing2.a26 plus various HMOVE values
 * At this point all sprites should look correct including high scores, bigsprite.a26
 * Ball, missiles
 * Implement paddle 0 using mouse position in window, see how that goes

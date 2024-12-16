@@ -769,6 +769,7 @@ struct object_counter
     uint8_t counter = 0;
     uint8_t period;
     uint8_t reset_timer = 0;
+    int horizontal_motion = 0;
     bool reset_pending = false;
 
     object_counter(uint8_t period) :
@@ -786,22 +787,24 @@ struct object_counter
         reset_pending = true;
     }
 
-    void advance()
+    void set_horizontal_motion(uint8_t move_register)
     {
-        bool reset = reset_pending && (reset_timer == 0);
-
-        counter = !reset ? ((counter + 1) % period) : 0;
-
-        reset_pending = (reset_timer > 0);
-
-        if(reset_timer > 0) {
-            reset_timer--;
-        }
+        horizontal_motion = Stella::get_signed_move(move_register);
     }
 
-    void move(uint8_t move_register)
+    void advance(bool within_hblank, bool hmove, int hmove_counter)
     {
-        counter = (counter + Stella::get_signed_move(move_register) + period) % period;
+        if(!within_hblank || (hmove && (hmove_counter > 7 - horizontal_motion))) {
+            bool reset = reset_pending && (reset_timer == 0);
+
+            counter = !reset ? ((counter + 1) % period) : 0;
+
+            reset_pending = (reset_timer > 0);
+
+            if(reset_timer > 0) {
+                reset_timer--;
+            }
+        }
     }
 };
 
@@ -821,6 +824,10 @@ struct stella
     sysclock& clk;
     uint32_t horizontal_clock = 0;
     uint32_t scanline = 0;
+    bool within_hblank = true;
+    bool late_reset_hblank = false;
+    bool hmove_latched = false;
+    int hmove_counter = 0;
 
     object_counter P0counter{Stella::visible_pixels};
     object_counter P1counter{Stella::visible_pixels};
@@ -921,12 +928,12 @@ struct stella
     {
         using namespace Stella;
         // printf("P0 advance at %d, current is %d,", horizontal_clock, (int)P0counter);
-        P0counter.advance();
+        P0counter.advance(within_hblank, hmove_latched, hmove_counter);
         // printf("advanced to %d\n", (int)P0counter);
-        P1counter.advance();
-        M0counter.advance();
-        M1counter.advance();
-        BLcounter.advance();
+        P1counter.advance(within_hblank, hmove_latched, hmove_counter);
+        M0counter.advance(within_hblank, hmove_latched, hmove_counter);
+        M1counter.advance(within_hblank, hmove_latched, hmove_counter);
+        BLcounter.advance(within_hblank, hmove_latched, hmove_counter);
     }
 
     uint8_t tia_write[64];
@@ -1083,7 +1090,7 @@ struct stella
             // XXX TODO
         } else if(isTIA(addr)) {
             uint8_t reg = addr & 0x3F;
-            if(debug & DEBUG_TIA) { printf("(%3d, %3d) wrote %02X to %02X (%s)\n", scanline, horizontal_clock, data, reg, TIA_register_names[reg].c_str()); }
+            if(debug & DEBUG_TIA) { printf("(%3d, %3d) wrote %02X to %02X (%s)\n", horizontal_clock, scanline, data, reg, TIA_register_names[reg].c_str()); }
             if(reg == VSYNC) {
                 if(data & VSYNC_SET) {
                     // printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
@@ -1114,15 +1121,17 @@ struct stella
                 tia_write[HMM0] = 0;
                 tia_write[HMP1] = 0;
                 tia_write[HMP0] = 0;
+                P0counter.set_horizontal_motion(0);
+                P1counter.set_horizontal_motion(0);
+                M0counter.set_horizontal_motion(0);
+                M1counter.set_horizontal_motion(0);
+                BLcounter.set_horizontal_motion(0);
             } else if(reg == HMOVE) {
                 // Apply the motion registers to players, missles, and ball
-                bool within_hblank = horizontal_clock < hblank_pixels;
-                // printf("move P0 %s hblank by %d\n", within_hblank ? "within" : "outside", get_signed_move(tia_write[HMP0]));
-                P0counter.move(tia_write[HMP0]);
-                P1counter.move(tia_write[HMP1]);
-                M0counter.move(tia_write[HMM0]);
-                M1counter.move(tia_write[HMM1]);
-                BLcounter.move(tia_write[HMBL]);
+                late_reset_hblank = true;
+                hmove_latched = true;
+                bool within_vblank = tia_write[VBLANK] & VBLANK_ENABLED;
+                hmove_counter = within_vblank ? 15 - 12 : 15;
             } else if(reg == RESMP1) {
                 // XXX handle hid/lock bit
                 M0counter.counter = P0counter.counter;
@@ -1137,14 +1146,19 @@ struct stella
                 tia_write[VDELP0] = data;
             } else if(reg == HMBL) {
                 tia_write[HMBL] = data;
+                BLcounter.set_horizontal_motion(data);
             } else if(reg == HMM1) {
                 tia_write[HMM1] = data;
+                M1counter.set_horizontal_motion(data);
             } else if(reg == HMM0) {
                 tia_write[HMM0] = data;
+                M0counter.set_horizontal_motion(data);
             } else if(reg == HMP1) {
                 tia_write[HMP1] = data;
+                P1counter.set_horizontal_motion(data);
             } else if(reg == HMP0) {
                 tia_write[HMP0] = data;
+                P0counter.set_horizontal_motion(data);
             } else if(reg == ENABL) {
                 if(VDELBL & VDEL_ENABLED) {
                     ENABLA = data;
@@ -1183,24 +1197,18 @@ struct stella
                 // printf("AUDC0,%llu,%d,%d\n", (clk_t)clk, reg, data);
                 tia_write[AUDC0] = data;
             } else if(reg == RESBL) {
-                bool within_hblank = horizontal_clock < hblank_pixels;
-                // PROBABLY WRONG
-                BLcounter.reset(within_hblank ? 4 : 15);
+                // ALMOST DEFINITELY WRONG
+                BLcounter.reset(within_hblank ? 2 : 4);
             } else if(reg == RESM1) {
-                bool within_hblank = horizontal_clock < hblank_pixels;
-                // PROBABLY WRONG
-                M1counter.reset(within_hblank ? 4 : 15);
+                // ALMOST DEFINITELY WRONG
+                M1counter.reset(within_hblank ? 2 : 4);
             } else if(reg == RESM0) { 
-                bool within_hblank = horizontal_clock < hblank_pixels;
-                // PROBABLY WRONG
-                M0counter.reset(within_hblank ? 4 : 15);
+                // ALMOST DEFINITELY WRONG
+                M0counter.reset(within_hblank ? 2 : 4);
             } else if(reg == RESP1) {
-                bool within_hblank = horizontal_clock < hblank_pixels;
                 P1counter.reset(within_hblank ? 3 : 5);
             } else if(reg == RESP0) {
-                bool within_hblank = horizontal_clock < hblank_pixels;
                 P0counter.reset(within_hblank ? 3 : 5);
-                printf("P0 reset at %d, current is %d, reset is %d\n", horizontal_clock, (int)P0counter, (int)P0counter.reset_timer);
             } else if(reg == PF2) {
                 tia_write[PF2] = data;
             } else if(reg == PF1) {
@@ -1432,7 +1440,6 @@ struct stella
         int pf = 0;
         pf = get_playfield_bit(horizontal_clock); // Does caching
 
-        bool within_hblank = horizontal_clock < hblank_pixels;
         if(within_hblank) {
             return 0x00; // color;
         }
@@ -1523,6 +1530,7 @@ struct stella
         tia_read[CXPPMM] |=
             ((p0 && p1) ? 0x80 : 0) |
             ((m0 && m1) ? 0x40 : 0);
+
         return color;
     }
 
@@ -1537,10 +1545,13 @@ struct stella
 	// Do all the work for this clock except leave horizontal_clock
 	// and scanline until the end since other operations use them
 
-        bool within_hblank = (horizontal_clock >= 0) && (horizontal_clock < hblank_pixels);
-        if(!within_hblank) {
-            advance_object_counters();
+        if(late_reset_hblank) {
+            within_hblank = horizontal_clock < (hblank_pixels + 8);
+        } else {
+            within_hblank = horizontal_clock < hblank_pixels;
         }
+
+        advance_object_counters();
 
         advance_interval_timer();
 
@@ -1556,8 +1567,14 @@ struct stella
 
         // And then move forward the horizontal clock and scanline
 
+        if(hmove_counter > 0) {
+            hmove_counter -= 1;
+        }
+
         horizontal_clock++;
         if(horizontal_clock >= clocks_per_line) {
+            late_reset_hblank = false;
+            hmove_latched = false;
             horizontal_clock = 0;
             scanline++;
             if(scanline >= lines_per_frame) {
@@ -1647,7 +1664,7 @@ int main(int argc, char **argv)
     cpu.reset();
 
     while(1) {
-        if(true) {
+        if(false) {
             std::string dis = read_bus_and_disassemble(hw, cpu.pc);
             printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
         }
