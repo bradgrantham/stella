@@ -1,4 +1,8 @@
 TODO
+* Implement paddle 0 using mouse position in window, see how that goes
+  * ./ On cursor motion, save paddle value from window X
+  * ./ VBLANK & 0x80 calculates then discharge clock value from paddle from 0 to clocks in one visible frame
+  * read INPT0 yields 0x00 through that clock value, 0x80 after that clock value
 * RESP0, RESP1 without HMOVE and VDELPx+GRPxA - *very close*, bigsprite shows positioned correctly
 * VDELPx+GRPxA (is playfield also delayed relative to WSYNC?)
   * might be correct now?
@@ -31,7 +35,6 @@ hence the magic '5' :)
   * My output matches timing2.a26 plus various HMOVE values
 * At this point all sprites should look correct including high scores, bigsprite.a26
 * Ball, missiles
-* Implement paddle 0 using mouse position in window, see how that goes
 * Shrink screen to only visible area
 * Implement second joystick
 * Factor audio into a header - use from main.cpp and trace_to_pcm.cpp
