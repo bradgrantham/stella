@@ -305,6 +305,20 @@ uint8_t ReadConsoleSwitches()
     return SWCHB_value;
 }
 
+uint16_t paddleValue;
+
+uint16_t RoGetPaddleValue(int paddle)
+{
+    if(paddle == 0)
+    {
+        return paddleValue;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
 // SWCHA and then player0button and player1button
 // The joystick values are set when not pressed
 uint8_t SWCHA_value =
@@ -414,10 +428,18 @@ static void HandleEvents(void)
     static bool switch_p0_difficulty = false;
     static bool switch_p1_difficulty = false;
     static bool shift_pressed = false;
-    SDL_Event event;
+    static SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
+            case SDL_MOUSEMOTION:
+                int width, height;
+                SDL_GetWindowSize(window, &width, &height);
+                paddleValue = 65536 * event.motion.x / width;
+                break;
+            // case SDL_MOUSEWHEELEVENT:
+                // SDL_MouseWheelEvent wheel;              /**< Mouse wheel event data */
+                // break;
             case SDL_WINDOWEVENT:
                 printf("window event %d\n", event.window.event);
                 switch(event.window.event) {
@@ -574,7 +596,7 @@ void Frame(const uint8_t* screen, [[maybe_unused]] float megahertz)
 
     now = std::chrono::system_clock::now();
     elapsed = now - previous_event_time;
-    if(elapsed.count() > .05) {
+    if(elapsed.count() > .03) {
         HandleEvents();
         previous_event_time = now;
     }
@@ -841,7 +863,9 @@ struct stella
     uint32_t interval_timer = 0;
     bool timer_interrupt = false;
 
-    uint8_t screen[228 * 262];
+    uint8_t row_buffers[2][Stella::clocks_per_line];
+    uint8_t *previous_row;
+    uint8_t *current_row;
 
     int audio_counter[2] = {0, 0};
     uint64_t next_sample_index = 0;
@@ -857,10 +881,13 @@ struct stella
     size_t preferredAudioBufferSizeBytes;
     std::vector<unsigned char> audio_buffer;
 
-    void set_colu(int x, int y, uint8_t colu)
+    clk_t paddle_discharge_clock[4];
+
+    uint8_t paddle_value_bit(int paddle)
     {
-        using namespace Stella;
-        screen[x + y * clocks_per_line] = colu;
+        bool paddle_discharged = clk > paddle_discharge_clock[paddle];
+        uint8_t paddle_bit = paddle_discharged ? 0x00 : 0x80;
+        return paddle_bit;
     }
 
     void set_interval_timer(int prescaler, uint8_t value)
@@ -947,6 +974,8 @@ struct stella
         ROM(std::move(ROM)),
         clk(clock)
     {
+        previous_row = row_buffers[1];
+        current_row = row_buffers[0];
         using namespace Stella;
         if(ROM.size() == 0x800) {
             ROM_address_mask = 0x7ff;
@@ -956,7 +985,7 @@ struct stella
             std::cout << "dunno about ROM size " << ROM.size() << "\n";
             abort();
         }
-        memset(screen, 0, sizeof(screen));
+        memset(row_buffers, 0, sizeof(row_buffers));
         tia_write[AUDV0] = 0;
         tia_write[AUDV1] = 0;
         PlatformInterface::Start(stereoU8SampleRate, preferredAudioBufferSizeBytes);
@@ -1010,16 +1039,17 @@ struct stella
                 return inpt4;
             } else if(reg == INPT3) {
                 // read latched or unlatched input port 3
-                return 0x0;
+                return paddle_value_bit(reg - INPT0);
             } else if(reg == INPT2) {
                 // read latched or unlatched input port 2
-                return 0x0;
+                return paddle_value_bit(reg - INPT0);
             } else if(reg == INPT1) {
                 // read latched or unlatched input port 1
-                return 0x0;
+                return paddle_value_bit(reg - INPT0);
             } else if(reg == INPT0) {
                 // read latched or unlatched input port 0
-                return 0x0;
+                printf("read INPT0, bit is %d\n", paddle_value_bit(reg - INPT0));
+                return paddle_value_bit(reg - INPT0);
             } else if(reg == CXM0P) {
                 return tia_read[CXM0P];
             } else if(reg == CXM1P) {
@@ -1100,7 +1130,6 @@ struct stella
                         // printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
                         scanline = 0;
                         // write_screen();
-                        PlatformInterface::Frame(screen, 1.0f);
                         vsync_enabled = false;
                     }
                 }
@@ -1240,6 +1269,15 @@ struct stella
                 wait_for_hsync = true;
             } else if(reg == VBLANK) {
                 tia_write[VBLANK] = data;
+                if(data & 0x80)
+                {
+                    for(int paddle = 0; paddle < 4; paddle++)
+                    {
+                        clk_t c = clk + PlatformInterface::RoGetPaddleValue(paddle) * 228llu * 240 / 65536;
+                        paddle_discharge_clock[paddle] = c;
+                        // printf("paddle %d discharged at clock %llu, line %llu\n", paddle, c, c / 228);
+                    }
+                }
                 // printf("write %d to VBLANK\n", data); 
             } else if(reg == 0x2D) {
                 // ignore
@@ -1563,7 +1601,7 @@ struct stella
             color = 0x0F;
         }
 
-        set_colu(horizontal_clock, scanline, color);
+        current_row[horizontal_clock] = color;
 
         // And then move forward the horizontal clock and scanline
 
@@ -1577,6 +1615,7 @@ struct stella
             hmove_latched = false;
             horizontal_clock = 0;
             scanline++;
+            std::swap(previous_row, current_row);
             if(scanline >= lines_per_frame) {
                 scanline = 0;
             }
@@ -1663,16 +1702,31 @@ int main(int argc, char **argv)
     CPU6502 cpu(clk_, hw);
     cpu.reset();
 
+    static uint8_t screen[228 * 262];
+
     while(1) {
         if(false) {
             std::string dis = read_bus_and_disassemble(hw, cpu.pc);
             printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
         }
+        auto previous_horizontal_clock = hw.horizontal_clock;
+        auto previous_line = hw.scanline;
         cpu.cycle();
+        if(hw.scanline != previous_line) {
+            memcpy(screen + Stella::clocks_per_line * previous_line, hw.previous_row, Stella::clocks_per_line);
+            if(hw.scanline == 0) {
+                PlatformInterface::Frame(screen, 1.0f);
+            }
+        }
         // printf("clk = %llu\n", (clk_t)clk);
         if(hw.wait_for_hsync) {
+            int current_line = hw.scanline;
             auto cycles = hw.advance_to_hsync(clk);
             clk.add_pixel_cycles(cycles);
+            memcpy(screen + Stella::clocks_per_line * current_line, hw.previous_row, Stella::clocks_per_line);
+            if(hw.scanline == 0) {
+                PlatformInterface::Frame(screen, 1.0f);
+            }
         }// else {
           //  hw.advance_to_clock(clk);
         //}
