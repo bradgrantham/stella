@@ -67,7 +67,9 @@ namespace Stella
         CTRLPF_SCORE_MODE = 0x02,
         CTRLPF_PLAYFIELD_ABOVE = 0x04,
 
-        ENABL_ENABLED = 0x01,
+        ENABL_ENABLED = 0x02,       // also ENAM0 and ENAM1
+
+        RESMP_LOCK = 0x02,          // missile hidden and locked to player center
 
         VDEL_ENABLED = 0x01,
 
