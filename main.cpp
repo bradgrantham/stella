@@ -441,7 +441,7 @@ static void HandleEvents(void)
                 // SDL_MouseWheelEvent wheel;              /**< Mouse wheel event data */
                 // break;
             case SDL_WINDOWEVENT:
-                printf("window event %d\n", event.window.event);
+                // printf("window event %d\n", event.window.event);
                 switch(event.window.event) {
                 }
                 break;
@@ -838,7 +838,7 @@ struct stella
         DEBUG_PIA = 0x0004,
         DEBUG_RAM = 0x0008,
     };
-    static constexpr uint32_t debug = DEBUG_TIA;
+    static constexpr uint32_t debug = 0; // DEBUG_TIA;
 
     std::array<uint8_t, 128> RAM;
     std::vector<uint8_t> ROM;
@@ -850,6 +850,12 @@ struct stella
     bool late_reset_hblank = false;
     bool hmove_latched = false;
     int hmove_counter = 0;
+
+    // debugging ; delete later
+    uint32_t vblank_start_clock;
+    uint32_t vblank_start_scanline;
+    uint32_t vsync_start_clock;
+    uint32_t vsync_start_scanline;
 
     object_counter P0counter{Stella::visible_pixels};
     object_counter P1counter{Stella::visible_pixels};
@@ -1048,7 +1054,7 @@ struct stella
                 return paddle_value_bit(reg - INPT0);
             } else if(reg == INPT0) {
                 // read latched or unlatched input port 0
-                printf("read INPT0, bit is %d\n", paddle_value_bit(reg - INPT0));
+                if(debug & DEBUG_TIA) printf("read INPT0, bit is %d\n", paddle_value_bit(reg - INPT0));
                 return paddle_value_bit(reg - INPT0);
             } else if(reg == CXM0P) {
                 return tia_read[CXM0P];
@@ -1124,10 +1130,16 @@ struct stella
             if(reg == VSYNC) {
                 if(data & VSYNC_SET) {
                     // printf("VSYNC was enabled at %d, %d\n", horizontal_clock, scanline);
+                    vsync_start_clock = horizontal_clock;
+                    vsync_start_scanline = scanline;
+                    uint32_t vbclocks = ((scanline - vblank_start_scanline + 262) % 262) * 228 + horizontal_clock - vblank_start_clock;
+                    // printf("%u clocks in VBLANK before VSYNC, %u lines\n", vbclocks, (vbclocks + 114) / 228);
                     vsync_enabled = true;
                 } else {
                     if(vsync_enabled) {
                         // printf("VSYNC was disabled at %d, %d\n", horizontal_clock, scanline);
+                        uint32_t clocks = ((scanline - vsync_start_scanline + 262) % 262) * 228 + horizontal_clock - vsync_start_clock;
+                        // printf("%u clocks in VSYNC, %u lines\n", clocks, (clocks + 114)/ 228);
                         scanline = 0;
                         // write_screen();
                         vsync_enabled = false;
@@ -1268,7 +1280,23 @@ struct stella
                 // printf("write %d to WSYNC\n", data); 
                 wait_for_hsync = true;
             } else if(reg == VBLANK) {
+                static bool in_vblank = false;
                 tia_write[VBLANK] = data;
+                if(data & VBLANK_ENABLED) {
+                    if(!in_vblank) {
+                        // printf("VBLANK was enabled at %d, %d\n", horizontal_clock, scanline);
+                        vblank_start_clock = horizontal_clock;
+                        vblank_start_scanline = scanline;
+                        in_vblank = true;
+                    }
+                } else {
+                    if(in_vblank) {
+                        // printf("VBLANK was disabled at %d, %d\n", horizontal_clock, scanline);
+                        uint32_t clocks = ((scanline - vblank_start_scanline + 262) % 262) * 228 + horizontal_clock - vblank_start_clock;
+                        // printf("%u clocks in VBLANK, %u lines\n", clocks, (clocks + 114) / 228);
+                        in_vblank = false;
+                    }
+                }
                 if(data & 0x80)
                 {
                     for(int paddle = 0; paddle < 4; paddle++)
@@ -1290,7 +1318,7 @@ struct stella
             }
         } else {
             printf("unhandled write of %02X to %04X\n", data, addr);
-            abort();
+            // abort();
         }
     }
 
@@ -1708,8 +1736,8 @@ int main(int argc, char **argv)
         if(false) {
             std::string dis = read_bus_and_disassemble(hw, cpu.pc);
             printf("%10llu %4u %s\n", (clk_t)clk, hw.horizontal_clock, dis.c_str());
+            printf("PC: %4X, A: %02X, X: %02X, Y: %02X, S: %02X, P: %02X\n", cpu.pc, cpu.a, cpu.x, cpu.y, cpu.s, cpu.p);
         }
-        auto previous_horizontal_clock = hw.horizontal_clock;
         auto previous_line = hw.scanline;
         cpu.cycle();
         if(hw.scanline != previous_line) {

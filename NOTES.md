@@ -1,3 +1,22 @@
+Port to Rosa Framework
+* maybe do some cleanup?  Move Stella impl to a different file?
+* Need a 160 * 192 COLU video mode
+  * ./ RoVideoSetMode
+  * Propagate sample offset through all FillLineBuffer calls
+  * App fills in COLU starting at "hblank_pixels" (68) for "visible_pixels" (160)
+    * This may not match hardware, hblanking might be shorter and background color visible otherwise
+* SDL to Rosa
+  * RoEventPoll
+  * keyboard - RoKeyRepeatInit
+        haveEvent = RoKeyRepeatUpdate(&keyRepeat, haveEvent, &ev);
+        keyboard events
+  * joystick - RoGetJoystickState
+  * need to add paddle entrypoint to Rosa - platform specific?
+  * EnqueueStereoU8AudioSamples(uint8_t *buf, size_t sz) to Rosa, copy Coleco?
+        RoAudioGetSamplingInfo
+  * video
+        RoVideoWaitNextField();
+
 TODO
 * Implement paddle 0 using mouse position in window, see how that goes
   * ./ On cursor motion, save paddle value from window X
